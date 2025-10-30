@@ -1,0 +1,36 @@
+## Compiler/cache outputs
+cache/
+out/
+
+## Development broadcast logs
+!/broadcast
+/broadcast/*/31337/
+/broadcast/**/dry-run/
+
+## Docs
+docs/
+
+## Environment
+.env
+
+## Project artifacts and OS files
+.DS_Store
+
+## Python caches
+__pycache__/
+*.py[cod]
+*.pyc
+*$py.class
+
+## Node/Frontend build artifacts
+node_modules/
+**/*.tsbuildinfo
+
+## Virtual environments
+venv/
+
+## Foundry build artifacts
+blockchain_code/lib/
+recovery_file_1762722134211.dat
+
+recovery_file_1762722134211.dat

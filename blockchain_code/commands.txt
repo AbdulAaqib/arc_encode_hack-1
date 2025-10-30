@@ -1,0 +1,208 @@
+<think>
+
+**Structuring deployment steps**
+
+I need to lay out a clear structure for deploying a LendingPool. The essential steps include setting the RPC and environment variables, building, and deploying the LendingPool. After that, I can optionally set SBT gating and move into lender and borrower functions. It’s important to start by referencing Arc docs, specifying how to configure the environment and compile the code, while avoiding unnecessary tool calls. Finally, I'll include sourcing the Arc Testnet USDC address.
+
+**Organizing contract interactions**
+
+From the Arc "Contract Addresses" documentation, I realize I can refer users to the "Deploy" tutorial for the necessary links. I should guide them to replace "0xArcTestnetUSDC" with the actual Arc Testnet USDC address. 
+
+It’s also essential to save the address in the .env file. For optional features like SBT gating and deposit locks, I’ll outline the necessary commands. Additionally, I’ll provide steps for lenders to deposit and withdraw, as well as how borrowers can open loans and repay them, including verifying defaults and banned addresses.
+
+**Clarifying loan structures and MetaMask**
+
+The `getLoan` function returns a `Loan memory`, which is structured as a tuple containing fields like principal, outstanding balance, start time, due time, and active status. 
+
+For the MetaMask integration in the UI, I should explain how to call the ERC20 approve, deposit, and withdraw methods. In Streamlit, the wallet_connect_component can be utilized. It’s also important to note that testnet USDC serves as gas on Arc, and I'll mention the minted SBT gating requirements in the `openLoan` function. Finally, I’ll include all the necessary code references and cite the relevant Arc documentation.
+
+</think>
+
+Here’s a clear, step-by-step walkthrough of “How you can use it now” to deploy and interact with the LendingPool on Arc Testnet, aligned with Arc’s Deploy tutorial.
+
+High-level prerequisites
+- Install Foundry (forge, cast) and set Arc Testnet RPC per Arc’s tutorial
+- Fund your test wallet with testnet USDC (Arc uses USDC for gas fees)
+- Prepare environment variables to avoid hardcoding secrets
+
+Reference: Arc’s Deploy on Arc tutorial explains Foundry setup, RPC configuration and deployment flow:
+[https://docs.arc.network/arc/tutorials/deploy-on-arc](https://docs.arc.network/arc/tutorials/deploy-on-arc)
+
+1) Configure your environment
+- Create a .env at your repo root and set:
+
+```bash
+ARC_TESTNET_RPC_URL="https://rpc.testnet.arc.network"  # Arc Testnet RPC
+PRIVATE_KEY="0x..."                                    # test-only key
+```
+
+- Source it:
+```bash
+source .env
+```
+
+2) Build the contracts locally
+- From repo root:
+```bash
+cd blockchain_code
+forge build
+```
+
+3) Deploy LendingPool (holds lender deposits and issues loans)
+- Replace 0xArcTestnetUSDC with the Arc Testnet USDC contract address from Arc docs
+- Replace 0xYourOwnerAddress with your governance/owner wallet
+
+```bash
+forge create src/LendingPool.sol:LendingPool \
+  --rpc-url "$ARC_TESTNET_RPC_URL" \
+  --private-key "$PRIVATE_KEY" \
+  --broadcast \
+  --constructor-args 0xArcTestnetUSDC 0xYourOwnerAddress
+```
+
+- Save the “Deployed to:” address to .env:
+```bash
+LENDING_POOL_ADDRESS="0x..."
+```
+
+4) Optional: enable SBT score gating and deposit lock
+- Set the TrustMintSBT address and minimum score:
+```bash
+cast send $LENDING_POOL_ADDRESS "setTrustMintSbt(address)" \
+  $SBT_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+cast send $LENDING_POOL_ADDRESS "setMinScoreToBorrow(uint256)" \
+  600 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+```
+
+- Set a global deposit lock (e.g., 1 day = 86400 seconds):
+```bash
+cast send $LENDING_POOL_ADDRESS "setDepositLockSeconds(uint256)" \
+  86400 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+```
+
+What the gating does on-chain:
+```125:138:/Users/abdulaaqib/Developer/Github/arc_encode_hack/blockchain_code/src/LendingPool.sol
+// Optional credential gating
+if (trustMintSbt != address(0)) {
+    ITrustMintSBT sbt = ITrustMintSBT(trustMintSbt);
+    require(sbt.hasSbt(borrower), "no SBT");
+    (uint256 score,, bool valid) = sbt.getScore(borrower);
+    require(valid, "invalid score");
+    require(score >= minScoreToBorrow, "score too low");
+}
+```
+
+5) Lender deposit (MetaMask/CLI)
+- Approve the pool to pull USDC (MetaMask will prompt):
+```bash
+cast send 0xArcTestnetUSDC "approve(address,uint256)" \
+  $LENDING_POOL_ADDRESS 1000000000 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+```
+
+- Deposit to the pool:
+```bash
+cast send $LENDING_POOL_ADDRESS "deposit(uint256)" \
+  1000000000 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+```
+
+- Withdraw (after lock expires and if liquidity is available):
+```bash
+cast send $LENDING_POOL_ADDRESS "withdraw(uint256)" \
+  500000000 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+```
+
+Deposit lock logic enforced on withdraw:
+```101:109:/Users/abdulaaqib/Developer/Github/arc_encode_hack/blockchain_code/src/LendingPool.sol
+require(block.timestamp >= lockedUntil[msg.sender], "locked");
+uint256 netBalance = deposits[msg.sender] - withdrawals[msg.sender];
+require(netBalance >= amount, "insufficient lender balance");
+uint256 available = availableLiquidity();
+require(available >= amount, "insufficient pool liquidity");
+```
+
+6) Borrower loan + repay (owner sets loans, borrower repays)
+- Owner opens a loan (sets principal and due time):
+```bash
+cast send $LENDING_POOL_ADDRESS "openLoan(address,uint256,uint256)" \
+  0xBorrower 1000000 604800 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+```
+
+- Borrower repays (approve then repay):
+```bash
+# Borrower approves pool to pull USDC
+cast send 0xArcTestnetUSDC "approve(address,uint256)" \
+  $LENDING_POOL_ADDRESS 1000000 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $BORROWER_PRIVATE_KEY
+
+# Borrower repays
+cast send $LENDING_POOL_ADDRESS "repay(uint256)" \
+  1000000 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $BORROWER_PRIVATE_KEY
+```
+
+7) Default detection (ban overdue borrowers)
+- After dueTime, if outstanding > 0, mark borrower banned:
+```bash
+cast send $LENDING_POOL_ADDRESS "checkDefaultAndBan(address)" \
+  0xBorrower \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+```
+
+- On-chain ban check you can use in the app:
+```bash
+cast call $LENDING_POOL_ADDRESS "isBanned(address)(bool)" \
+  0xBorrower \
+  --rpc-url $ARC_TESTNET_RPC_URL
+```
+
+8) Useful views for UI
+- Pool liquidity:
+```bash
+cast call $LENDING_POOL_ADDRESS "availableLiquidity()(uint256)" \
+  --rpc-url $ARC_TESTNET_RPC_URL
+```
+
+- Lender net balance:
+```bash
+cast call $LENDING_POOL_ADDRESS "lenderBalance(address)(uint256)" \
+  0xLender \
+  --rpc-url $ARC_TESTNET_RPC_URL
+```
+
+- Loan state tuple (principal, outstanding, startTime, dueTime, active):
+```bash
+cast call $LENDING_POOL_ADDRESS "getLoan(address)(uint256,uint256,uint256,uint256,bool)" \
+  0xBorrower \
+  --rpc-url $ARC_TESTNET_RPC_URL
+```
+
+MetaMask integration tips
+- Deposits and repayments both require ERC20 approve followed by the pool’s deposit/repay calls
+- Withdraw and view calls are straightforward transactions/reads
+- Your UI should check isBanned(borrower) before showing any loan actions
+
+Reminders
+- Arc uses USDC as gas; you need testnet USDC to pay fees (see faucet in Arc docs)
+- Replace 0xArcTestnetUSDC with the actual Arc Testnet USDC address from Arc docs
+- Never use production keys; keep PRIVATE_KEY test-only and minimal balance
+
+Reference again: Arc’s Deploy tutorial (Foundry + RPC + deploy flow)
+[https://docs.arc.network/arc/tutorials/deploy-on-arc](https://docs.arc.network/arc/tutorials/deploy-on-arc)

@@ -1,0 +1,162 @@
+# Environment setup (run once per terminal session)
+source /Users/abdulaaqib/Developer/Github/arc_encode_hack/.env
+
+cd /Users/abdulaaqib/Developer/Github/arc_encode_hack/blockchain_code
+forge build
+
+# Deploy LendingPool (constructor takes the initial owner address)
+forge create src/LendingPool.sol:LendingPool \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast \
+  --constructor-args $INITIAL_OWNER_ADDRESS
+
+# Owner: set TrustMint SBT gate address (set to 0x0 to disable)
+cast send $LENDING_POOL_ADDRESS "setTrustMintSbt(address)" \
+  $TRUST_MINT_SBT_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+# Owner: update minimum TrustMint score required to borrow
+cast send $LENDING_POOL_ADDRESS "setMinScoreToBorrow(uint256)" \
+  600 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+# Owner: set global deposit lock duration in seconds (testing: ~0.5s -> 1 second)
+cast send $LENDING_POOL_ADDRESS "setDepositLockSeconds(uint256)" \
+  1 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+# Lender: deposit native token (amount and --value must match, in wei)
+cast send $LENDING_POOL_ADDRESS "deposit(uint256)" \
+  1000000 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $LENDER_PRIVATE_KEY \
+  --value 1000000
+
+# Lender: withdraw unlocked funds after lock expires (amount in wei, 1 USDC)
+cast send $LENDING_POOL_ADDRESS "withdraw(uint256)" \
+  1000000 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $LENDER_PRIVATE_KEY
+
+# Owner: open a loan for a borrower (principal in wei, term in seconds)
+cast send $LENDING_POOL_ADDRESS "openLoan(address,uint256,uint256)" \
+  $BORROWER_ADDRESS \
+  1000000 \
+  604800 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+# Borrower: repay outstanding loan amount (amount and --value must match)
+cast send $LENDING_POOL_ADDRESS "repay(uint256)" \
+  1000000 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $BORROWER_PRIVATE_KEY \
+  --value 1000000
+
+# Anyone: check for borrower default and mark banned if overdue
+cast send $LENDING_POOL_ADDRESS "checkDefaultAndBan(address)" \
+  $BORROWER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+# Owner: unban a borrower after resolving default
+cast send $LENDING_POOL_ADDRESS "unban(address)" \
+  $BORROWER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+# --- Default scenario (force ban then unban) ---
+
+# Owner: open a short-term loan to trigger default (1 second term, no repayment)
+cast send $LENDING_POOL_ADDRESS "openLoan(address,uint256,uint256)" \
+  $BORROWER_ADDRESS \
+  1000000 \
+  1 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+# Wait for the loan due time to pass
+sleep 2
+
+# Anyone: check default and ban (should ban borrower)
+cast send $LENDING_POOL_ADDRESS "checkDefaultAndBan(address)" \
+  $BORROWER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+# View: confirm borrower is banned
+cast call $LENDING_POOL_ADDRESS "isBanned(address)(bool)" \
+  $BORROWER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+# Owner: unban borrower to restore access
+cast send $LENDING_POOL_ADDRESS "unban(address)" \
+  $BORROWER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+# View: confirm borrower is no longer banned
+cast call $LENDING_POOL_ADDRESS "isBanned(address)(bool)" \
+  $BORROWER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+# View: check if a borrower is currently banned
+cast call $LENDING_POOL_ADDRESS "isBanned(address)(bool)" \
+  $BORROWER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+# View: retrieve full loan tuple for a borrower
+cast call $LENDING_POOL_ADDRESS "getLoan(address)(uint256,uint256,uint256,uint256,bool)" \
+  $BORROWER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+# View: lender net balance (totalDeposited - totalWithdrawn)
+cast call $LENDING_POOL_ADDRESS "lenderBalance(address)(uint256)" \
+  $LENDER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+# View: preview how much a lender can withdraw right now
+cast call $LENDING_POOL_ADDRESS "previewWithdraw(address)(uint256)" \
+  $LENDER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+# View: inspect underlying deposit entries (returns array of (amount,timestamp))
+cast call $LENDING_POOL_ADDRESS "getDeposits(address)((uint128,uint64)[])" \
+  $LENDER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+# View: check pool liquidity (native token balance held by the contract)
+cast call $LENDING_POOL_ADDRESS "availableLiquidity()(uint256)" \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+# View: total liquidity tracked by the pool (deposits minus withdrawals)
+cast call $LENDING_POOL_ADDRESS "totalDeposits()(uint256)" \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+# View: per-lender accounting helpers
+cast call $LENDING_POOL_ADDRESS "totalDeposited(address)(uint256)" \
+  $LENDER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+cast call $LENDING_POOL_ADDRESS "totalWithdrawn(address)(uint256)" \
+  $LENDER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+cast call $LENDING_POOL_ADDRESS "nextWithdrawalIndex(address)(uint256)" \
+  $LENDER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+# View: current TrustMint settings and deposit lock duration
+cast call $LENDING_POOL_ADDRESS "trustMintSbt()(address)" \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+cast call $LENDING_POOL_ADDRESS "minScoreToBorrow()(uint256)" \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+cast call $LENDING_POOL_ADDRESS "depositLockSeconds()(uint256)" \
+  --rpc-url $ARC_TESTNET_RPC_URL
+

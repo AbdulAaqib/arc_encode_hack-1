@@ -1,0 +1,3 @@
+[submodule "blockchain_code/lib/openzeppelin-contracts"]
+	path = blockchain_code/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
