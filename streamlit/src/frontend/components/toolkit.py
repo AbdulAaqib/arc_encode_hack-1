@@ -174,6 +174,39 @@ def build_llm_toolkit(
         if score_fn is None:
             score_fn = getattr(contract.functions, "scores", None)
         if score_fn is None:
+            # Fallback: build a minimal ABI for registry read methods if the loaded ABI doesn't include them
+            try:
+                minimal_abi = [
+                    {
+                        "name": "getScore",
+                        "type": "function",
+                        "stateMutability": "view",
+                        "inputs": [{"name": "borrower", "type": "address"}],
+                        "outputs": [
+                            {"name": "value", "type": "uint256"},
+                            {"name": "timestamp", "type": "uint256"},
+                            {"name": "valid", "type": "bool"},
+                        ],
+                    },
+                    {
+                        "name": "scores",
+                        "type": "function",
+                        "stateMutability": "view",
+                        "inputs": [{"name": "borrower", "type": "address"}],
+                        "outputs": [
+                            {"name": "value", "type": "uint256"},
+                            {"name": "timestamp", "type": "uint256"},
+                            {"name": "valid", "type": "bool"},
+                        ],
+                    },
+                ]
+                fallback_contract = w3.eth.contract(address=contract.address, abi=minimal_abi)
+                score_fn = getattr(fallback_contract.functions, "getScore", None) or getattr(
+                    fallback_contract.functions, "scores", None
+                )
+            except Exception:
+                score_fn = None
+        if score_fn is None:
             return tool_error("The configured contract does not expose credit score functions.")
         try:
             checksum_wallet = Web3.to_checksum_address(wallet_address)

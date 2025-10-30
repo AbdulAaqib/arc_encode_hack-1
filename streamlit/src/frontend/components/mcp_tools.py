@@ -90,31 +90,14 @@ def render_mcp_tools_page() -> None:
             )
         if not abi:
             st.warning(
-                "Contract ABI not found. Point ``%s`` to a valid JSON file in `.env`."
-                % ("ARC_CREDIT_LINE_MANAGER_ABI_PATH" if address_source != "CREDIT_SCORE_REGISTRY_ADDRESS" else "ARC_CREDIT_LINE_MANAGER_ABI_PATH")
+                "Contract ABI not found. Point `ARC_CREDIT_LINE_MANAGER_ABI_PATH` to the ABI JSON (use the Registry ABI for credit score tools)."
             )
         if not contract_address:
-            st.warning("Set `CREDIT_LINE_MANAGER_ADDRESS` (preferred) or `CREDIT_SCORE_REGISTRY_ADDRESS` in `.env`.")
-        else:
-            if address_source != "CREDIT_LINE_MANAGER_ADDRESS":
-                st.warning(
-                    f"Using fallback `{address_source}` for contract address. For availableCredit/draw, prefer `CREDIT_LINE_MANAGER_ADDRESS`."
-                )
+            st.warning("Set `CREDIT_SCORE_REGISTRY_ADDRESS` in `.env`.")
         if not private_key:
             st.info("`PRIVATE_KEY` not configured. Read-only calls will work, draws will be disabled.")
 
-    with hints_col:
-        st.markdown(
-            """
-            **Environment configuration**
-            - `ARC_TESTNET_RPC_URL`: Arc or compatible RPC endpoint
-            - `CREDIT_LINE_MANAGER_ADDRESS` (preferred) or `CREDIT_SCORE_REGISTRY_ADDRESS`: deployed contract address
-            - `ARC_CREDIT_LINE_MANAGER_ABI_PATH`: path to CreditLineManager ABI JSON on disk
-            - `ARC_CREDIT_LINE_MANAGER_ABI_PATH`: path to CreditScoreRegistry ABI JSON on disk (when using registry)
-            - `PRIVATE_KEY`: signer key for draw/repay transactions (kept in env)
-            - Optional gas tuning: `ARC_USDC_DECIMALS`, `ARC_GAS_LIMIT`, `ARC_GAS_PRICE_GWEI`
-            """
-        )
+    
 
     if not (w3 and abi and contract_address):
         st.stop()

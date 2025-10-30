@@ -44,11 +44,11 @@ def _initialize_chat_state() -> None:
 
 
 def render_chatbot_page() -> None:
-    """Render the chatbot page using Azure OpenAI completions, mirroring Streamlit's tutorial flow."""
+    """Render the chatbot page using Azure OpenAI chat completions, mirroring Streamlit's tutorial flow."""
 
     st.title("💬 PawChain Chatbot")
     st.caption(
-        "Powered by Azure OpenAI chat completions and Streamlit's conversational components for a GPT-like experience."
+        "Powered by OpenAI GPT-5 and MCP tools, using Streamlit's conversational components for a GPT-like experience."
     )
 
     client = _create_azure_client()
@@ -60,58 +60,94 @@ def render_chatbot_page() -> None:
 
     _initialize_chat_state()
 
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    # Always ensure the MCP system prompt is first so the model knows it has tools
+    msgs = st.session_state.messages
+    if not msgs or msgs[0].get("role") != "system":
+        msgs.insert(0, {"role": "system", "content": _MCP_SYSTEM_PROMPT})
 
-    if prompt := st.chat_input("Ask Doggo anything about setup, credit scoring, or MCP tooling…"):
-        _append_message("user", prompt)
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    # Render history that supports tool messages
+    render_llm_history(st.session_state.messages)
 
-        if client is None:
-            fallback = (
-                "Azure OpenAI credentials are missing. Configure them to receive generated responses, or review the Intro page."
-            )
-            _append_message("assistant", fallback)
-            with st.chat_message("assistant"):
-                st.markdown(fallback)
-            return
+    # Single chat input
+    prompt = st.chat_input(
+        "Ask Doggo anything about setup, credit scoring, or MCP tooling…",
+        key="chatbot_prompt",
+    )
+    if not prompt:
+        return
 
-        deployment = os.getenv(AZURE_DEPLOYMENT_ENV)
-        if not deployment:
-            warning = (
-                "Environment variable `AZURE_OPENAI_CHAT_DEPLOYMENT` is not set. Add it to `.env` with your deployed "
-                "Azure OpenAI model name."
-            )
-            _append_message("assistant", warning)
-            with st.chat_message("assistant"):
-                st.warning(warning)
-            return
+    _append_message("user", prompt)
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-        try:
-            with st.chat_message("assistant"):
-                stream = client.chat.completions.create(
-                    model=deployment,
-                    messages=[
-                        {"role": msg["role"], "content": msg["content"]}
-                        for msg in st.session_state.messages
-                    ],
-                    stream=True,
-                )
-                assistant_reply = st.write_stream(_stream_chunks(stream))
-        except APIStatusError as exc:  # pragma: no cover - surfaced via UI only
-            assistant_reply = f"Azure OpenAI error: {exc.message}"
-            st.error(assistant_reply)
-        except Exception as exc:  # pragma: no cover - surfaced via UI only
-            assistant_reply = f"Unexpected Azure OpenAI error: {exc}"
-            st.error(assistant_reply)
+    # Azure OpenAI pre-flight
+    if client is None:
+        fallback = (
+            "Azure OpenAI credentials are missing. Configure them to receive generated responses, or review the Intro page."
+        )
+        _append_message("assistant", fallback)
+        with st.chat_message("assistant"):
+            st.markdown(fallback)
+        return
 
-        _append_message("assistant", assistant_reply)
+    deployment = os.getenv(AZURE_DEPLOYMENT_ENV)
+    if not deployment:
+        warning = (
+            "Environment variable `AZURE_OPENAI_CHAT_DEPLOYMENT` is not set. Add it to `.env` with your deployed "
+            "Azure OpenAI model name."
+        )
+        _append_message("assistant", warning)
+        with st.chat_message("assistant"):
+            st.warning(warning)
+        return
 
-    # Divider before MCP LLM Playground
-    st.divider()
-    render_mcp_llm_playground_section()
+    # Build Web3 + contract for MCP tools (single chat experience, tool-enabled)
+    rpc_url = os.getenv(ARC_RPC_ENV)
+    contract_address = os.getenv("CREDIT_SCORE_REGISTRY_ADDRESS")
+    abi_path = os.getenv("ARC_CREDIT_LINE_MANAGER_ABI_PATH")
+    private_key = os.getenv(PRIVATE_KEY_ENV)
+    token_decimals = int(os.getenv(USDC_DECIMALS_ENV, "6"))
+    default_gas_limit = int(os.getenv(GAS_LIMIT_ENV, "200000"))
+    gas_price_gwei = os.getenv(GAS_PRICE_GWEI_ENV, "1")
+
+    w3 = get_web3_client(rpc_url)
+    abi = load_contract_abi(abi_path)
+
+    if w3 is None:
+        st.info("Connect to the RPC and provide contract details to unlock MCP tools in chat.")
+        return
+    if not abi or not contract_address:
+        st.info(
+            "Set `CREDIT_SCORE_REGISTRY_ADDRESS` and `ARC_CREDIT_LINE_MANAGER_ABI_PATH` in `.env` to unlock MCP tools."
+        )
+        return
+
+    try:
+        contract = w3.eth.contract(address=Web3.to_checksum_address(contract_address), abi=abi)
+    except Exception as exc:
+        st.error(f"Unable to build contract instance: {exc}")
+        return
+
+    tools_schema, function_map = build_llm_toolkit(
+        w3=w3,
+        contract=contract,
+        token_decimals=token_decimals,
+        private_key=private_key,
+        default_gas_limit=default_gas_limit,
+        gas_price_gwei=gas_price_gwei,
+    )
+
+    if not tools_schema:
+        st.warning("No MCP tools are available for the current contract configuration.")
+        return
+
+    # Tool-enabled chat loop (single chat)
+    with st.spinner("Azure OpenAI is orchestrating MCP tools…"):
+        _run_mcp_llm_conversation(
+            client, deployment, st.session_state.messages, tools_schema, function_map
+        )
+
+    return
 
 
 def _stream_chunks(stream: Iterable) -> Iterable[str]:
@@ -136,8 +172,6 @@ from web3 import Web3
 try:
     from .config import (
         ARC_RPC_ENV,
-        CONTRACT_ADDRESS_ENV,
-        CONTRACT_ABI_PATH_ENV,
         PRIVATE_KEY_ENV,
         USDC_DECIMALS_ENV,
         GAS_LIMIT_ENV,
@@ -145,8 +179,6 @@ try:
     )
 except Exception:  # pragma: no cover - fallback values allow the UI to load
     ARC_RPC_ENV = "ARC_TESTNET_RPC_URL"
-    CONTRACT_ADDRESS_ENV = "CREDIT_LINE_MANAGER_ADDRESS"
-    CONTRACT_ABI_PATH_ENV = "ARC_CREDIT_LINE_MANAGER_ABI_PATH"
     PRIVATE_KEY_ENV = "PRIVATE_KEY"
     USDC_DECIMALS_ENV = "ARC_USDC_DECIMALS"
     GAS_LIMIT_ENV = "ARC_GAS_LIMIT"
@@ -233,7 +265,7 @@ def _run_mcp_llm_conversation(
 
 
 def render_mcp_llm_playground_section() -> None:
-    st.subheader("🤖 MCP LLM Playground")
+    st.subheader("MCP LLM Playground")
 
     # Pre-flight Azure
     client = _create_azure_client()
@@ -251,8 +283,8 @@ def render_mcp_llm_playground_section() -> None:
 
     # Build Web3 + contract
     rpc_url = os.getenv(ARC_RPC_ENV)
-    contract_address = os.getenv(CONTRACT_ADDRESS_ENV)
-    abi_path = os.getenv(CONTRACT_ABI_PATH_ENV)
+    contract_address = os.getenv("CREDIT_SCORE_REGISTRY_ADDRESS")
+    abi_path = os.getenv("ARC_CREDIT_LINE_MANAGER_ABI_PATH")
     private_key = os.getenv(PRIVATE_KEY_ENV)
     token_decimals = int(os.getenv(USDC_DECIMALS_ENV, "6"))
     default_gas_limit = int(os.getenv(GAS_LIMIT_ENV, "200000"))
@@ -265,7 +297,7 @@ def render_mcp_llm_playground_section() -> None:
         st.info("Connect to the RPC and provide contract details to unlock the MCP playground.")
         return
     if not abi or not contract_address:
-        st.info("Provide a valid ABI and contract address in `.env` to unlock the MCP playground.")
+        st.info("Set `CREDIT_SCORE_REGISTRY_ADDRESS` and `ARC_CREDIT_LINE_MANAGER_ABI_PATH` in `.env` to unlock the MCP playground.")
         return
 
     try:
