@@ -7,6 +7,7 @@ import os
 from typing import Iterable, Optional
 
 import streamlit as st
+from io import BytesIO
 
 openai_spec = importlib.util.find_spec("openai")
 if openai_spec is not None:  # pragma: no cover - imported at runtime when available
@@ -43,6 +44,65 @@ def _initialize_chat_state() -> None:
         ]
 
 
+def _extract_text_from_upload(upload) -> str:
+    """Best-effort text extraction from Streamlit UploadedFile.
+    Supports txt, md, pdf (via pypdf), docx (via python-docx), csv, json.
+    Falls back to utf-8 decode for unknown types.
+    """
+    try:
+        name = getattr(upload, "name", "")
+        ext = os.path.splitext(name.lower())[1]
+        data = upload.getvalue() if hasattr(upload, "getvalue") else upload.read()
+        if ext in {".txt", ".md", ".csv", ".json"}:
+            try:
+                return data.decode("utf-8", errors="ignore")
+            except Exception:
+                return ""
+        if ext == ".pdf":
+            spec = importlib.util.find_spec("pypdf")
+            if spec is not None:  # pragma: no cover - optional dependency
+                from pypdf import PdfReader  # type: ignore
+                try:
+                    reader = PdfReader(BytesIO(data))
+                    return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+                except Exception:
+                    return ""
+            else:
+                return "(PDF provided; install 'pypdf' to extract text)"
+        if ext == ".docx":
+            spec = importlib.util.find_spec("docx")
+            if spec is not None:  # pragma: no cover - optional dependency
+                from docx import Document  # type: ignore
+                try:
+                    doc = Document(BytesIO(data))
+                    return "\n".join(p.text for p in doc.paragraphs)
+                except Exception:
+                    return ""
+            else:
+                return "(DOCX provided; install 'python-docx' to extract text)"
+        # Fallback: try utf-8
+        try:
+            return data.decode("utf-8", errors="ignore")
+        except Exception:
+            return ""
+    except Exception:
+        return ""
+
+
+def _build_attachment_context(uploads, clip_len: int | None = None) -> str:
+    """Compose a compact context block from uploaded docs; if clip_len is None or <=0, include full text."""
+    if not uploads:
+        return ""
+    sections: list[str] = []
+    for f in uploads:
+        text = _extract_text_from_upload(f)
+        if not text:
+            continue
+        excerpt = text if not clip_len or clip_len <= 0 else text[:clip_len]
+        sections.append(f"### {getattr(f, 'name', 'document')}\n{excerpt}")
+    return "\n\n".join(sections)
+
+
 def render_chatbot_page() -> None:
     """Render the chatbot page using Azure OpenAI chat completions, mirroring Streamlit's tutorial flow."""
 
@@ -51,6 +111,21 @@ def render_chatbot_page() -> None:
         "Powered by OpenAI GPT-5 and MCP tools, using Streamlit's conversational components for a GPT-like experience."
     )
 
+    # Document attachments (sent along with your next message)
+    attachments = st.file_uploader(
+        "Attach documents (txt, md, pdf, docx, csv, json)",
+        type=["txt", "md", "pdf", "docx", "csv", "json"],
+        accept_multiple_files=True,
+        key="chatbot_attachments",
+    )
+    include_attachments = st.checkbox(
+        "Include attachments in next message",
+        value=True,
+        key="chatbot_include_attachments",
+    )
+    # Removed UI slider; use optional env var to control per-file clip length
+    clip_len = int(os.getenv("CHATBOT_ATTACHMENT_MAX_CHARS", "6000"))
+    
     client = _create_azure_client()
     if client is None:
         st.info(
@@ -76,9 +151,19 @@ def render_chatbot_page() -> None:
     if not prompt:
         return
 
-    _append_message("user", prompt)
+    # Build attached document context (lightweight, clipped)
+    attachment_context = _build_attachment_context(attachments, clip_len) if (attachments and include_attachments) else ""
+    composed_prompt = (
+        f"{prompt}\n\n[Attached documents]\n{attachment_context}" if attachment_context else prompt
+    )
+
+    _append_message("user", composed_prompt)
     with st.chat_message("user"):
         st.markdown(prompt)
+        if attachment_context:
+            with st.expander("Attachments included in this turn"):
+                for f in attachments:
+                    st.write(f"- {getattr(f, 'name', 'document')}")
 
     # Azure OpenAI pre-flight
     if client is None:

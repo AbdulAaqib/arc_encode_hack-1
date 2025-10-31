@@ -46,6 +46,41 @@ def _render_tool_content(content: str) -> None:
         st.write(parsed)
 
 
+def _render_user_message(content: str) -> None:
+    with st.chat_message("user"):
+        if content and "[Attached documents]" in content:
+            pre, attach_block = content.split("[Attached documents]", 1)
+            st.markdown(pre.strip())
+            # Truncate preview to avoid overly large UI; configurable via env var
+            import os
+            import re
+            preview_chars = int(os.getenv("CHAT_PREVIEW_MAX_CHARS", "1000"))
+            # Parse sections by headers created in attachment context: "### <filename>\n<excerpt>"
+            sections = re.split(r"(?m)^###\s*", attach_block)
+            if len(sections) > 1:
+                with st.expander("Attached documents (truncated preview)"):
+                    for seg in sections:
+                        seg = seg.strip()
+                        if not seg:
+                            continue
+                        name_end = seg.find("\n")
+                        if name_end == -1:
+                            name = seg
+                            body = ""
+                        else:
+                            name = seg[:name_end].strip()
+                            body = seg[name_end + 1:].strip()
+                        trunc = body[:preview_chars]
+                        ellipsis = "…" if len(body) > preview_chars else ""
+                        st.markdown(f"**{name}**\n\n{trunc}{ellipsis}")
+            else:
+                # No sections parsed; show label only
+                with st.expander("Attached documents"):
+                    st.markdown("(preview unavailable)")
+        else:
+            st.markdown(content or "")
+
+
 def render_llm_history(messages: Iterable[Dict[str, Any]]) -> None:
     for message in messages:
         role = message.get("role")
@@ -53,8 +88,7 @@ def render_llm_history(messages: Iterable[Dict[str, Any]]) -> None:
         if role == "system":
             continue
         if role == "user":
-            with st.chat_message("user"):
-                st.markdown(content or "")
+            _render_user_message(content or "")
         elif role == "assistant":
             with st.chat_message("assistant"):
                 st.markdown(content or "")
