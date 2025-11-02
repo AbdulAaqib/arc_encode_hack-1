@@ -1,0 +1,48 @@
+cast call $SBT_ADDRESS "getScore(address)(uint256,uint256,bool)" \
+  $INITIAL_OWNER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+  cast call $SBT_ADDRESS "hasSbt(address)(bool)" \
+  $INITIAL_OWNER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+  cast send $SBT_ADDRESS "issueScore(address,uint256)" \
+  $INITIAL_OWNER_ADDRESS 569 \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+  cast call $SBT_ADDRESS "getScore(address)(uint256,uint256,bool)" \
+  $INITIAL_OWNER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+  cast call $SBT_ADDRESS "hasSbt(address)(bool)" \
+  $INITIAL_OWNER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL
+
+cast send $SBT_ADDRESS "revokeScore(address)" \
+  $INITIAL_OWNER_ADDRESS \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY
+
+
+  forge create src/TrustMintSBT.sol:TrustMintSBT \
+  --rpc-url $ARC_TESTNET_RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast \
+  --constructor-args "Sniffer" Sniffer $INITIAL_OWNER_ADDRESS
+
+
+
+cast call $SBT_ADDRESS "hasSbt(address)(bool)" $INITIAL_OWNER_ADDRESS --rpc-url $ARC_TESTNET_RPC_URL
+
+
+cast call $SBT_ADDRESS "getScore(address)(uint256,uint256,bool)" $INITIAL_OWNER_ADDRESS --rpc-url $ARC_TESTNET_RPC_URL
+
+
+cast send $SBT_ADDRESS "issueScore(address,uint256)" $INITIAL_OWNER_ADDRESS 720 --rpc-url $ARC_TESTNET_RPC_URL --private-key $PRIVATE_KEY
+
+cast call $SBT_ADDRESS "getScore(address)(uint256,uint256,bool)" $INITIAL_OWNER_ADDRESS --rpc-url $ARC_TESTNET_RPC_URL
+
+
+cast send $SBT_ADDRESS "revokeScore(address)" $INITIAL_OWNER_ADDRESS --rpc-url $ARC_TESTNET_RPC_URL --private-key $PRIVATE_KEY
+
