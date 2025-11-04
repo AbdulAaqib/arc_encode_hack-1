@@ -50,12 +50,16 @@ def _render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, 
             st.warning("Tool provided tx_request that is not valid JSON.")
             tx_req = None
     action = mm_payload.get("action") or "eth_sendTransaction"
+    from_address = mm_payload.get("from")
     chain_id = mm_payload.get("chainId")
     if chain_id is None:
         st.warning("Chain ID not provided by tool; ensure your wallet is connected to the correct network.")
 
     cached = st.session_state.get(DEFAULT_SESSION_KEY, {})
     preferred_address = cached.get("address") if isinstance(cached, dict) else None
+    if from_address:
+        preferred_address = from_address
+        mm_state.setdefault("wallet_address", from_address)
 
     mm_state.setdefault("pending_command", None)
     mm_state.setdefault("last_result", None)
@@ -68,6 +72,10 @@ def _render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, 
     command_sequence = pending.get("sequence") if isinstance(pending, dict) else None
 
     # Invoke the headless bridge component (returns last payload or command result)
+    command_payload = {"tx_request": tx_req, "action": action}
+    if from_address:
+        command_payload["from"] = from_address
+
     component_value = wallet_command(
         key=component_key,
         command=command,
@@ -107,6 +115,8 @@ def _render_wallet_section(mm_state: Dict[str, Any], w3: Web3, key_prefix: str, 
     with status_cols[1]:
         if chain_id:
             st.info(f"Required chain: {chain_id}")
+        if from_address:
+            st.caption(f"Requested signer: {from_address}")
 
     if pending:
         st.warning("Command sent to MetaMask. Confirm in your wallet …")
@@ -201,6 +211,7 @@ def _render_tool_runner(
     function_map: Dict[str, Callable[..., str]],
     w3: Web3,
     key_prefix: str,
+    parameter_defaults: Dict[str, Dict[str, Any]] | None = None,
 ) -> None:
     st.subheader("Run a tool")
 
@@ -217,6 +228,8 @@ def _render_tool_runner(
     if isinstance(existing_state, dict) and existing_state.get("metamask"):
         st.markdown("### MetaMask bridge")
         _render_wallet_section(existing_state, w3, key_prefix, selected)
+        st.info("Complete the wallet action above or clear the MetaMask state before running the tool again.")
+        return
 
     schema = next(item for item in tools_schema if item["function"]["name"] == selected)
     parameters = schema["function"].get("parameters", {})
@@ -228,6 +241,8 @@ def _render_tool_runner(
         field_type = details.get("type", "string")
         label = f"{name} ({field_type})"
         default = details.get("default")
+        if parameter_defaults:
+            default = parameter_defaults.get(selected, {}).get(name, default)
 
         if field_type == "integer":
             value = st.number_input(label, value=int(default or 0), step=1, key=f"{key_prefix}_param_{selected}_{name}")
@@ -309,14 +324,57 @@ def render_mcp_tools_page() -> None:
     default_gas_limit = int(os.getenv(GAS_LIMIT_ENV, "200000"))
     gas_price_gwei = os.getenv(GAS_PRICE_GWEI_ENV, "1")
 
+    # Build web3 client early for chain id and status
+    w3 = get_web3_client(rpc_url)
+
     # Signing role selector (without editing .env)
     st.divider()
-    st.subheader("Signing Role")
-    role = st.selectbox("Select role for signing", ["Read-only", "Owner", "Lender", "Borrower"], index=0, key="signing_role")
-    # Removed interactive private key inputs; derive keys from environment
-    owner_pk = os.getenv(PRIVATE_KEY_ENV)  # Owner key from .env
-    lender_pk = os.getenv("LENDER_PRIVATE_KEY")  # Optional, from .env if set
-    borrower_pk = os.getenv("BORROWER_PRIVATE_KEY")  # Optional, from .env if set
+    st.subheader("MetaMask Role Assignment")
+
+    chain_id = None
+    try:
+        chain_id = w3.eth.chain_id if w3 else None
+    except Exception:
+        chain_id = None
+
+    roles_key = "role_addresses"
+    role_addresses: Dict[str, str] = st.session_state.get(roles_key, {}) if isinstance(st.session_state.get(roles_key), dict) else {}
+    role_addresses.setdefault("Owner", "")
+    role_addresses.setdefault("Lender", "")
+    role_addresses.setdefault("Borrower", "")
+
+    wallet_info = connect_wallet(
+        key="role_assignment_wallet",
+        require_chain_id=chain_id,
+        preferred_address=role_addresses.get("Owner") or role_addresses.get("Lender") or role_addresses.get("Borrower"),
+        autoconnect=True,
+    )
+
+    current_address = wallet_info.get("address") if isinstance(wallet_info, dict) else None
+    assignment_col, info_col = st.columns([2, 1])
+
+    with assignment_col:
+        role_choice = st.selectbox("Assign connected wallet to role", ["Owner", "Lender", "Borrower"], key="role_assignment_choice")
+        if current_address:
+            st.info(f"Connected wallet: {current_address}")
+            if st.button("Assign to role", key="assign_role_button"):
+                role_addresses[role_choice] = current_address
+                st.session_state[roles_key] = role_addresses
+                st.toast(f"Assigned {current_address} to {role_choice}", icon="✅")
+        else:
+            st.warning("Connect MetaMask to assign addresses to roles.")
+
+    with info_col:
+        st.caption("Stored role addresses")
+        st.json(role_addresses)
+
+    st.divider()
+    st.subheader("Active Role")
+    role = st.selectbox("Select role for available tools", ["Read-only", "Owner", "Lender", "Borrower"], index=0, key="signing_role")
+
+    owner_pk = os.getenv(PRIVATE_KEY_ENV)
+    lender_pk = os.getenv("LENDER_PRIVATE_KEY")
+    borrower_pk = os.getenv("BORROWER_PRIVATE_KEY")
 
     effective_private_key = None
     if role == "Owner":
@@ -326,8 +384,13 @@ def render_mcp_tools_page() -> None:
     elif role == "Borrower":
         effective_private_key = borrower_pk or None
 
-    # Build web3
-    w3 = get_web3_client(rpc_url)
+    role_private_keys = {
+        "Owner": owner_pk or None,
+        "Lender": lender_pk or None,
+        "Borrower": borrower_pk or None,
+    }
+
+    # Status on RPC connectivity and role readiness
     status_col, _, _ = st.columns([2, 0.2, 2])
     with status_col:
         if w3:
@@ -336,10 +399,9 @@ def render_mcp_tools_page() -> None:
             st.error("RPC unavailable. Set `ARC_TESTNET_RPC_URL` in `.env` and ensure the endpoint is reachable.")
         if role == "Read-only":
             st.info("Read-only mode selected; transactions are disabled.")
-        elif not effective_private_key:
-            st.info(
-                f"No PRIVATE_KEY found in environment for selected role '{role}'. Transactions are disabled. "
-                "Set PRIVATE_KEY (Owner) or LENDER_PRIVATE_KEY / BORROWER_PRIVATE_KEY in .env."
+        elif role != "Read-only" and not (effective_private_key or role_addresses.get(role)):
+            st.warning(
+                f"No signer configured for {role}. Assign a MetaMask wallet above or set environment private keys."
             )
     if not w3:
         st.stop()
@@ -374,7 +436,12 @@ def render_mcp_tools_page() -> None:
     pool_abi_path = os.getenv(LENDING_POOL_ABI_PATH_ENV)
     usdc_address = os.getenv(USDC_ADDRESS_ENV)
     usdc_abi_path = os.getenv(USDC_ABI_PATH_ENV)
-    usdc_decimals = int(os.getenv(USDC_DECIMALS_ENV, "6"))
+    usdc_decimals = int(os.getenv(USDC_DECIMALS_ENV, "18"))
+    if usdc_decimals < 18:
+        st.warning(
+            "USDC_DECIMALS is set to a value below 18. On Arc the native token uses 18 decimals;"
+            " update your .env if deposits/repayments appear too small."
+        )
 
     if not pool_address or not pool_abi_path:
         st.warning("Set `LENDING_POOL_ADDRESS` and `LENDING_POOL_ABI_PATH` in `.env` to enable LendingPool tools.")
@@ -393,9 +460,12 @@ def render_mcp_tools_page() -> None:
         w3=w3,
         pool_contract=pool_contract,
         token_decimals=usdc_decimals,
+        native_decimals=18,
         private_key=effective_private_key,
         default_gas_limit=default_gas_limit,
         gas_price_gwei=gas_price_gwei,
+        role_addresses=role_addresses,
+        role_private_keys=role_private_keys,
     )
 
     read_only_tools = {"availableLiquidity", "lenderBalance", "isBanned"}
@@ -410,7 +480,7 @@ def render_mcp_tools_page() -> None:
         "unban",
         "getLoan",
     }
-    lender_tools = {"approveUSDC", "deposit"}
+    lender_tools = {"approveUSDC", "deposit", "withdraw"}
     borrower_tools = {"approveUSDC", "repay", "getLoan"}
 
     allowed_names = set(read_only_tools)
@@ -424,8 +494,24 @@ def render_mcp_tools_page() -> None:
     filtered_schema = [entry for entry in tools_schema if entry["function"]["name"] in allowed_names]
     filtered_map = {name: fn for name, fn in function_map.items() if name in allowed_names}
 
+    parameter_defaults = {
+        "lenderBalance": {"lender_address": role_addresses.get("Lender", "")},
+        "getLoan": {"borrower_address": role_addresses.get("Borrower", "")},
+        "isBanned": {"borrower_address": role_addresses.get("Borrower", "")},
+        "deposit": {"amount": 1.0},
+        "withdraw": {"amount": 1.0},
+        "repay": {"amount": 1.0},
+        "openLoan": {
+            "borrower_address": role_addresses.get("Borrower", ""),
+            "principal": 1.0,
+            "term_seconds": 604800,
+        },
+        "checkDefaultAndBan": {"borrower_address": role_addresses.get("Borrower", "")},
+        "unban": {"borrower_address": role_addresses.get("Borrower", "")},
+    }
+
     if not filtered_schema:
         st.info("No tools available for the selected role.")
     else:
-        _render_tool_runner(filtered_schema, filtered_map, w3, key_prefix="pool")
+        _render_tool_runner(filtered_schema, filtered_map, w3, key_prefix="pool", parameter_defaults=parameter_defaults)
 

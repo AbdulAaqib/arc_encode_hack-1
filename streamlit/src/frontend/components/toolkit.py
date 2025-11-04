@@ -206,7 +206,13 @@ def _format_receipt(receipt: Any) -> dict[str, Any]:
     }
 
 
-def _metamask_tx_request(contract: Contract, fn_name: str, args: list[Any], value_wei: int = 0) -> Dict[str, Any]:
+def _metamask_tx_request(
+    contract: Contract,
+    fn_name: str,
+    args: list[Any],
+    value_wei: int = 0,
+    from_address: Optional[str] = None,
+) -> Dict[str, Any]:
     """Build a minimal eth_sendTransaction request for MetaMask: {to, data, value}."""
 
     data_hex: str
@@ -218,6 +224,11 @@ def _metamask_tx_request(contract: Contract, fn_name: str, args: list[Any], valu
     req: Dict[str, Any] = {"to": contract.address, "data": data_hex}
     if value_wei:
         req["value"] = hex(value_wei)
+    if from_address:
+        try:
+            req["from"] = Web3.to_checksum_address(from_address)
+        except Exception:
+            req["from"] = from_address
     return req
 
 
@@ -592,38 +603,61 @@ def build_lending_pool_toolkit(
     w3: Web3,
     pool_contract: Contract,
     token_decimals: int,
+    native_decimals: int,
     private_key: Optional[str],
     default_gas_limit: int,
     gas_price_gwei: str,
+    role_addresses: Optional[Dict[str, str]] = None,
+    role_private_keys: Optional[Dict[str, Optional[str]]] = None,
 ) -> Tuple[list[Dict[str, Any]], Dict[str, Callable[..., str]]]:
     tools: list[Dict[str, Any]] = []
     handlers: Dict[str, Callable[..., str]] = {}
 
     derived_private_key = private_key or os.getenv(PRIVATE_KEY_ENV)
+    role_private_keys = role_private_keys or {}
+    role_addresses = role_addresses or {}
+
+    def _acct_for_key(key: Optional[str]) -> Optional[str]:
+        if not key:
+            return None
+        try:
+            return w3.eth.account.from_key(key).address  # type: ignore[arg-type]
+        except Exception:
+            return None
+
+    owner_key = role_private_keys.get("Owner") or derived_private_key
+    lender_key = role_private_keys.get("Lender") or None
+    borrower_key = role_private_keys.get("Borrower") or None
+
+    owner_address = role_addresses.get("Owner") or _acct_for_key(owner_key)
+    lender_address = role_addresses.get("Lender") or _acct_for_key(lender_key)
+    borrower_address = role_addresses.get("Borrower") or _acct_for_key(borrower_key)
 
     def register(name: str, description: str, parameters: Dict[str, Any], handler: Callable[..., str]) -> None:
         tools.append({"type": "function", "function": {"name": name, "description": description, "parameters": parameters}})
         handlers[name] = handler
 
     # Helpers
-    def _check_pk() -> Optional[str]:
-        if not derived_private_key:
-            return "PRIVATE_KEY not configured. Configure it in .env to submit transactions."
-        return None
-
-    def _acct() -> Optional[str]:
-        try:
-            return w3.eth.account.from_key(derived_private_key).address  # type: ignore[arg-type]
-        except Exception:
-            return None
+    def _metamask_success(tx_req: Dict[str, Any], hint: str, from_addr: Optional[str]) -> str:
+        payload: Dict[str, Any] = {
+            "metamask": {
+                "tx_request": tx_req,
+                "action": "eth_sendTransaction",
+                "chainId": w3.eth.chain_id,
+                "hint": hint,
+            }
+        }
+        if from_addr:
+            payload["metamask"]["from"] = from_addr
+        return tool_success(payload)
 
     def _fees() -> Dict[str, int]:
         return _fee_params(w3, gas_price_gwei)
 
-    def _to_token_units(amount: float | int) -> int:
+    def _to_token_units(amount: float | int, *, use_native: bool = False) -> int:
         try:
             amt = Decimal(str(amount))
-            scale = Decimal(10) ** int(token_decimals)
+            scale = Decimal(10) ** int(native_decimals if use_native else token_decimals)
             return int(amt * scale)
         except Exception:
             return int(amount)
@@ -713,23 +747,56 @@ def build_lending_pool_toolkit(
     # ---- Writes ----
     def deposit_tool(amount: float | int) -> str:
         try:
-            amt = _to_token_units(amount)
+            amt_decimal = Decimal(str(amount))
+        except Exception:
+            return tool_error("Invalid amount supplied; enter a numeric value.")
+        if amt_decimal > Decimal("1"):
+            return tool_error("Amount exceeds 1 USDC test limit for safety.")
+        try:
+            amt = _to_token_units(amt_decimal, use_native=True)
         except Exception as exc:
             return tool_error(f"Invalid amount: {exc}")
-        try:
-            tx_req = _metamask_tx_request(pool_contract, "deposit", [amt], value_wei=amt)
-            return tool_success(
-                {
-                    "metamask": {
-                        "tx_request": tx_req,
-                        "action": "eth_sendTransaction",
+
+        signer = _acct_for_key(lender_key)
+        if signer and lender_key:
+            try:
+                tx = pool_contract.functions.deposit(amt).build_transaction(
+                    {
+                        "from": signer,
+                        "nonce": _next_nonce(w3, signer),
+                        "gas": default_gas_limit,
                         "chainId": w3.eth.chain_id,
-                        "hint": "Use MetaMask (lender wallet) to deposit native USDC into the pool.",
+                        "value": amt,
+                        **_fees(),
                     }
-                }
-            )
-        except Exception as exc:
-            return tool_error(f"Unable to build MetaMask tx: {exc}")
+                )
+                sent = _sign_and_send(w3, lender_key, tx)  # type: ignore[arg-type]
+                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "deposit failed"))
+            except ContractLogicError as exc:
+                return tool_error(f"Contract rejected: {exc}")
+            except Exception as exc:
+                return tool_error(f"deposit failed: {exc}")
+
+        if lender_address:
+            try:
+                tx_req = _metamask_tx_request(
+                    pool_contract,
+                    "deposit",
+                    [amt],
+                    value_wei=amt,
+                    from_address=lender_address,
+                )
+                return _metamask_success(
+                    tx_req,
+                    "Use MetaMask (lender wallet) to deposit native USDC into the pool.",
+                    lender_address,
+                )
+            except Exception as exc:
+                return tool_error(f"Unable to build MetaMask tx: {exc}")
+
+        return tool_error(
+            "Lender wallet not configured. Assign a lender address via MetaMask role assignment or set LENDER_PRIVATE_KEY."
+        )
 
     register(
         "deposit",
@@ -744,23 +811,54 @@ def build_lending_pool_toolkit(
 
     def withdraw_tool(amount: float | int) -> str:
         try:
-            amt = _to_token_units(amount)
+            amt_decimal = Decimal(str(amount))
+        except Exception:
+            return tool_error("Invalid amount supplied; enter a numeric value.")
+        if amt_decimal > Decimal("1"):
+            return tool_error("Amount exceeds 1 USDC test limit for safety.")
+        try:
+            amt = _to_token_units(amt_decimal, use_native=True)
         except Exception as exc:
             return tool_error(f"Invalid amount: {exc}")
-        try:
-            tx_req = _metamask_tx_request(pool_contract, "withdraw", [amt])
-            return tool_success(
-                {
-                    "metamask": {
-                        "tx_request": tx_req,
-                        "action": "eth_sendTransaction",
+
+        signer = _acct_for_key(lender_key)
+        if signer and lender_key:
+            try:
+                tx = pool_contract.functions.withdraw(amt).build_transaction(
+                    {
+                        "from": signer,
+                        "nonce": _next_nonce(w3, signer),
+                        "gas": default_gas_limit,
                         "chainId": w3.eth.chain_id,
-                        "hint": "Use MetaMask (lender wallet) to withdraw unlocked funds.",
+                        **_fees(),
                     }
-                }
-            )
-        except Exception as exc:
-            return tool_error(f"Unable to build MetaMask tx: {exc}")
+                )
+                sent = _sign_and_send(w3, lender_key, tx)  # type: ignore[arg-type]
+                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "withdraw failed"))
+            except ContractLogicError as exc:
+                return tool_error(f"Contract rejected: {exc}")
+            except Exception as exc:
+                return tool_error(f"withdraw failed: {exc}")
+
+        if lender_address:
+            try:
+                tx_req = _metamask_tx_request(
+                    pool_contract,
+                    "withdraw",
+                    [amt],
+                    from_address=lender_address,
+                )
+                return _metamask_success(
+                    tx_req,
+                    "Use MetaMask (lender wallet) to withdraw unlocked funds.",
+                    lender_address,
+                )
+            except Exception as exc:
+                return tool_error(f"Unable to build MetaMask tx: {exc}")
+
+        return tool_error(
+            "Lender wallet not configured. Assign a lender address via MetaMask role assignment or set LENDER_PRIVATE_KEY."
+        )
 
     register(
         "withdraw",
@@ -774,50 +872,60 @@ def build_lending_pool_toolkit(
     )
 
     def openLoan_tool(borrower_address: str, principal: float | int, term_seconds: int) -> str:
-        if not derived_private_key:
+        try:
+            borrower = Web3.to_checksum_address(borrower_address)
+        except ValueError:
+            return tool_error("Invalid borrower address supplied.")
+        try:
+            principal_decimal = Decimal(str(principal))
+        except Exception:
+            return tool_error("Invalid principal supplied; enter a numeric value.")
+        if principal_decimal > Decimal("1"):
+            return tool_error("Principal exceeds 1 USDC test limit for safety.")
+        try:
+            principal_units = _to_token_units(principal_decimal, use_native=True)
+        except Exception as exc:
+            return tool_error(f"Invalid principal: {exc}")
+        signer = _acct_for_key(owner_key)
+        if signer and owner_key:
             try:
-                borrower = Web3.to_checksum_address(borrower_address)
-            except ValueError:
-                return tool_error("Invalid borrower address supplied.")
-            try:
-                principal_units = _to_token_units(principal)
-            except Exception as exc:
-                return tool_error(f"Invalid principal: {exc}")
-            try:
-                tx_req = _metamask_tx_request(pool_contract, "openLoan", [borrower, principal_units, int(term_seconds)])
-                return tool_success({
-                    "metamask": {
-                        "tx_request": tx_req,
-                        "action": "eth_sendTransaction",
+                fees = _fees()
+                nonce = _next_nonce(w3, signer)
+                tx = pool_contract.functions.openLoan(borrower, principal_units, int(term_seconds)).build_transaction(
+                    {
+                        "from": signer,
+                        "nonce": nonce,
+                        "gas": default_gas_limit,
                         "chainId": w3.eth.chain_id,
-                        "hint": "Use MetaMask (lender wallet) to open a loan."
+                        **fees,
                     }
-                })
+                )
+                sent = _sign_and_send(w3, owner_key, tx)  # type: ignore[arg-type]
+                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "openLoan failed"))
+            except ContractLogicError as exc:
+                return tool_error(f"Contract rejected: {exc}")
+            except Exception as exc:
+                return tool_error(f"openLoan failed: {exc}")
+
+        if owner_address:
+            try:
+                tx_req = _metamask_tx_request(
+                    pool_contract,
+                    "openLoan",
+                    [borrower, principal_units, int(term_seconds)],
+                    from_address=owner_address,
+                )
+                return _metamask_success(
+                    tx_req,
+                    "Use MetaMask (owner wallet) to open a loan.",
+                    owner_address,
+                )
             except Exception as exc:
                 return tool_error(f"Unable to build MetaMask tx: {exc}")
-        try:
-            owner_addr = _acct()
-            if not owner_addr:
-                return tool_error("Invalid PRIVATE_KEY; cannot derive signer address.")
-            borrower = Web3.to_checksum_address(borrower_address)
-            fees = _fees()
-            nonce = _next_nonce(w3, owner_addr)
-            principal_units = _to_token_units(principal)
-            tx = pool_contract.functions.openLoan(borrower, principal_units, int(term_seconds)).build_transaction(
-                {
-                    "from": owner_addr,
-                    "nonce": nonce,
-                    "gas": default_gas_limit,
-                    "chainId": w3.eth.chain_id,
-                    **fees,
-                }
-            )
-            sent = _sign_and_send(w3, derived_private_key, tx)  # type: ignore[arg-type]
-            return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "openLoan failed"))
-        except ContractLogicError as exc:
-            return tool_error(f"Contract rejected: {exc}")
-        except Exception as exc:
-            return tool_error(f"openLoan failed: {exc}")
+
+        return tool_error(
+            "Owner wallet not configured. Assign an owner address via MetaMask role assignment or set PRIVATE_KEY."
+        )
 
     register(
         "openLoan",
@@ -836,23 +944,56 @@ def build_lending_pool_toolkit(
 
     def repay_tool(amount: float | int) -> str:
         try:
-            amt = _to_token_units(amount)
+            amt_decimal = Decimal(str(amount))
+        except Exception:
+            return tool_error("Invalid amount supplied; enter a numeric value.")
+        if amt_decimal > Decimal("1"):
+            return tool_error("Amount exceeds 1 USDC test limit for safety.")
+        try:
+            amt = _to_token_units(amt_decimal, use_native=True)
         except Exception as exc:
             return tool_error(f"Invalid amount: {exc}")
-        try:
-            tx_req = _metamask_tx_request(pool_contract, "repay", [amt], value_wei=amt)
-            return tool_success(
-                {
-                    "metamask": {
-                        "tx_request": tx_req,
-                        "action": "eth_sendTransaction",
+
+        signer = _acct_for_key(borrower_key)
+        if signer and borrower_key:
+            try:
+                tx = pool_contract.functions.repay(amt).build_transaction(
+                    {
+                        "from": signer,
+                        "nonce": _next_nonce(w3, signer),
+                        "gas": default_gas_limit,
                         "chainId": w3.eth.chain_id,
-                        "hint": "Use MetaMask (borrower wallet) to repay the loan.",
+                        "value": amt,
+                        **_fees(),
                     }
-                }
-            )
-        except Exception as exc:
-            return tool_error(f"Unable to build MetaMask tx: {exc}")
+                )
+                sent = _sign_and_send(w3, borrower_key, tx)  # type: ignore[arg-type]
+                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "repay failed"))
+            except ContractLogicError as exc:
+                return tool_error(f"Contract rejected: {exc}")
+            except Exception as exc:
+                return tool_error(f"repay failed: {exc}")
+
+        if borrower_address:
+            try:
+                tx_req = _metamask_tx_request(
+                    pool_contract,
+                    "repay",
+                    [amt],
+                    value_wei=amt,
+                    from_address=borrower_address,
+                )
+                return _metamask_success(
+                    tx_req,
+                    "Use MetaMask (borrower wallet) to repay the loan.",
+                    borrower_address,
+                )
+            except Exception as exc:
+                return tool_error(f"Unable to build MetaMask tx: {exc}")
+
+        return tool_error(
+            "Borrower wallet not configured. Assign a borrower address via MetaMask role assignment or set BORROWER_PRIVATE_KEY."
+        )
 
     register(
         "repay",
@@ -866,28 +1007,50 @@ def build_lending_pool_toolkit(
     )
 
     def checkDefaultAndBan_tool(borrower_address: str) -> str:
-        msg = _check_pk()
-        if msg:
-            return tool_error(msg)
+        signer = _acct_for_key(owner_key)
         try:
             borrower = Web3.to_checksum_address(borrower_address)
-            fees = _fees()
-            nonce = _next_nonce(w3, _acct())
-            tx = pool_contract.functions.checkDefaultAndBan(borrower).build_transaction(
-                {
-                    "from": _acct(),
-                    "nonce": nonce,
-                    "gas": default_gas_limit,
-                    "chainId": w3.eth.chain_id,
-                    **fees,
-                }
-            )
-            sent = _sign_and_send(w3, derived_private_key, tx)  # type: ignore[arg-type]
-            return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "checkDefaultAndBan failed"))
-        except ContractLogicError as exc:
-            return tool_error(f"Contract rejected: {exc}")
-        except Exception as exc:
-            return tool_error(f"checkDefaultAndBan failed: {exc}")
+        except ValueError:
+            return tool_error("Invalid borrower address supplied.")
+        if signer and owner_key:
+            try:
+                fees = _fees()
+                nonce = _next_nonce(w3, signer)
+                tx = pool_contract.functions.checkDefaultAndBan(borrower).build_transaction(
+                    {
+                        "from": signer,
+                        "nonce": nonce,
+                        "gas": default_gas_limit,
+                        "chainId": w3.eth.chain_id,
+                        **fees,
+                    }
+                )
+                sent = _sign_and_send(w3, owner_key, tx)  # type: ignore[arg-type]
+                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "checkDefaultAndBan failed"))
+            except ContractLogicError as exc:
+                return tool_error(f"Contract rejected: {exc}")
+            except Exception as exc:
+                return tool_error(f"checkDefaultAndBan failed: {exc}")
+
+        if owner_address:
+            try:
+                tx_req = _metamask_tx_request(
+                    pool_contract,
+                    "checkDefaultAndBan",
+                    [borrower],
+                    from_address=owner_address,
+                )
+                return _metamask_success(
+                    tx_req,
+                    "Use MetaMask (owner wallet) to check default and ban overdue borrower.",
+                    owner_address,
+                )
+            except Exception as exc:
+                return tool_error(f"Unable to build MetaMask tx: {exc}")
+
+        return tool_error(
+            "Owner wallet not configured. Assign an owner address via MetaMask role assignment or set PRIVATE_KEY."
+        )
 
     register(
         "checkDefaultAndBan",
@@ -901,25 +1064,44 @@ def build_lending_pool_toolkit(
     )
 
     def setDepositLockSeconds_tool(seconds: int) -> str:
-        msg = _check_pk()
-        if msg:
-            return tool_error(msg)
-        try:
-            tx = pool_contract.functions.setDepositLockSeconds(int(seconds)).build_transaction(
-                {
-                    "from": _acct(),
-                    "nonce": _next_nonce(w3, _acct()),
-                    "gas": default_gas_limit,
-                    "chainId": w3.eth.chain_id,
-                    **_fees(),
-                }
-            )
-            sent = _sign_and_send(w3, derived_private_key, tx)  # type: ignore[arg-type]
-            return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "setDepositLockSeconds failed"))
-        except ContractLogicError as exc:
-            return tool_error(f"Contract rejected: {exc}")
-        except Exception as exc:
-            return tool_error(f"setDepositLockSeconds failed: {exc}")
+        signer = _acct_for_key(owner_key)
+        if signer and owner_key:
+            try:
+                tx = pool_contract.functions.setDepositLockSeconds(int(seconds)).build_transaction(
+                    {
+                        "from": signer,
+                        "nonce": _next_nonce(w3, signer),
+                        "gas": default_gas_limit,
+                        "chainId": w3.eth.chain_id,
+                        **_fees(),
+                    }
+                )
+                sent = _sign_and_send(w3, owner_key, tx)  # type: ignore[arg-type]
+                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "setDepositLockSeconds failed"))
+            except ContractLogicError as exc:
+                return tool_error(f"Contract rejected: {exc}")
+            except Exception as exc:
+                return tool_error(f"setDepositLockSeconds failed: {exc}")
+
+        if owner_address:
+            try:
+                tx_req = _metamask_tx_request(
+                    pool_contract,
+                    "setDepositLockSeconds",
+                    [int(seconds)],
+                    from_address=owner_address,
+                )
+                return _metamask_success(
+                    tx_req,
+                    "Use MetaMask (owner wallet) to update deposit lock duration.",
+                    owner_address,
+                )
+            except Exception as exc:
+                return tool_error(f"Unable to build MetaMask tx: {exc}")
+
+        return tool_error(
+            "Owner wallet not configured. Assign an owner address via MetaMask role assignment or set PRIVATE_KEY."
+        )
 
     register(
         "setDepositLockSeconds",
@@ -933,26 +1115,49 @@ def build_lending_pool_toolkit(
     )
 
     def setTrustMintSbt_tool(sbt_address: str) -> str:
-        msg = _check_pk()
-        if msg:
-            return tool_error(msg)
         try:
             sbt = Web3.to_checksum_address(sbt_address)
-            tx = pool_contract.functions.setTrustMintSbt(sbt).build_transaction(
-                {
-                    "from": _acct(),
-                    "nonce": _next_nonce(w3, _acct()),
-                    "gas": default_gas_limit,
-                    "chainId": w3.eth.chain_id,
-                    **_fees(),
-                }
-            )
-            sent = _sign_and_send(w3, derived_private_key, tx)  # type: ignore[arg-type]
-            return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "setTrustMintSbt failed"))
-        except ContractLogicError as exc:
-            return tool_error(f"Contract rejected: {exc}")
-        except Exception as exc:
-            return tool_error(f"setTrustMintSbt failed: {exc}")
+        except ValueError:
+            return tool_error("Invalid SBT address supplied.")
+
+        signer = _acct_for_key(owner_key)
+        if signer and owner_key:
+            try:
+                tx = pool_contract.functions.setTrustMintSbt(sbt).build_transaction(
+                    {
+                        "from": signer,
+                        "nonce": _next_nonce(w3, signer),
+                        "gas": default_gas_limit,
+                        "chainId": w3.eth.chain_id,
+                        **_fees(),
+                    }
+                )
+                sent = _sign_and_send(w3, owner_key, tx)  # type: ignore[arg-type]
+                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "setTrustMintSbt failed"))
+            except ContractLogicError as exc:
+                return tool_error(f"Contract rejected: {exc}")
+            except Exception as exc:
+                return tool_error(f"setTrustMintSbt failed: {exc}")
+
+        if owner_address:
+            try:
+                tx_req = _metamask_tx_request(
+                    pool_contract,
+                    "setTrustMintSbt",
+                    [sbt],
+                    from_address=owner_address,
+                )
+                return _metamask_success(
+                    tx_req,
+                    "Use MetaMask (owner wallet) to set TrustMint SBT address (0x0 to disable).",
+                    owner_address,
+                )
+            except Exception as exc:
+                return tool_error(f"Unable to build MetaMask tx: {exc}")
+
+        return tool_error(
+            "Owner wallet not configured. Assign an owner address via MetaMask role assignment or set PRIVATE_KEY."
+        )
 
     register(
         "setTrustMintSbt",
@@ -966,25 +1171,44 @@ def build_lending_pool_toolkit(
     )
 
     def setMinScoreToBorrow_tool(new_min_score: int) -> str:
-        msg = _check_pk()
-        if msg:
-            return tool_error(msg)
-        try:
-            tx = pool_contract.functions.setMinScoreToBorrow(int(new_min_score)).build_transaction(
-                {
-                    "from": _acct(),
-                    "nonce": _next_nonce(w3, _acct()),
-                    "gas": default_gas_limit,
-                    "chainId": w3.eth.chain_id,
-                    **_fees(),
-                }
-            )
-            sent = _sign_and_send(w3, derived_private_key, tx)  # type: ignore[arg-type]
-            return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "setMinScoreToBorrow failed"))
-        except ContractLogicError as exc:
-            return tool_error(f"Contract rejected: {exc}")
-        except Exception as exc:
-            return tool_error(f"setMinScoreToBorrow failed: {exc}")
+        signer = _acct_for_key(owner_key)
+        if signer and owner_key:
+            try:
+                tx = pool_contract.functions.setMinScoreToBorrow(int(new_min_score)).build_transaction(
+                    {
+                        "from": signer,
+                        "nonce": _next_nonce(w3, signer),
+                        "gas": default_gas_limit,
+                        "chainId": w3.eth.chain_id,
+                        **_fees(),
+                    }
+                )
+                sent = _sign_and_send(w3, owner_key, tx)  # type: ignore[arg-type]
+                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "setMinScoreToBorrow failed"))
+            except ContractLogicError as exc:
+                return tool_error(f"Contract rejected: {exc}")
+            except Exception as exc:
+                return tool_error(f"setMinScoreToBorrow failed: {exc}")
+
+        if owner_address:
+            try:
+                tx_req = _metamask_tx_request(
+                    pool_contract,
+                    "setMinScoreToBorrow",
+                    [int(new_min_score)],
+                    from_address=owner_address,
+                )
+                return _metamask_success(
+                    tx_req,
+                    "Use MetaMask (owner wallet) to set minimum score for borrowing.",
+                    owner_address,
+                )
+            except Exception as exc:
+                return tool_error(f"Unable to build MetaMask tx: {exc}")
+
+        return tool_error(
+            "Owner wallet not configured. Assign an owner address via MetaMask role assignment or set PRIVATE_KEY."
+        )
 
     register(
         "setMinScoreToBorrow",
@@ -998,26 +1222,49 @@ def build_lending_pool_toolkit(
     )
 
     def unban_tool(borrower_address: str) -> str:
-        msg = _check_pk()
-        if msg:
-            return tool_error(msg)
         try:
             borrower = Web3.to_checksum_address(borrower_address)
-            tx = pool_contract.functions.unban(borrower).build_transaction(
-                {
-                    "from": _acct(),
-                    "nonce": _next_nonce(w3, _acct()),
-                    "gas": default_gas_limit,
-                    "chainId": w3.eth.chain_id,
-                    **_fees(),
-                }
-            )
-            sent = _sign_and_send(w3, derived_private_key, tx)  # type: ignore[arg-type]
-            return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "unban failed"))
-        except ContractLogicError as exc:
-            return tool_error(f"Contract rejected: {exc}")
-        except Exception as exc:
-            return tool_error(f"unban failed: {exc}")
+        except ValueError:
+            return tool_error("Invalid borrower address supplied.")
+
+        signer = _acct_for_key(owner_key)
+        if signer and owner_key:
+            try:
+                tx = pool_contract.functions.unban(borrower).build_transaction(
+                    {
+                        "from": signer,
+                        "nonce": _next_nonce(w3, signer),
+                        "gas": default_gas_limit,
+                        "chainId": w3.eth.chain_id,
+                        **_fees(),
+                    }
+                )
+                sent = _sign_and_send(w3, owner_key, tx)  # type: ignore[arg-type]
+                return tool_success(sent) if "error" not in sent else tool_error(sent.get("error", "unban failed"))
+            except ContractLogicError as exc:
+                return tool_error(f"Contract rejected: {exc}")
+            except Exception as exc:
+                return tool_error(f"unban failed: {exc}")
+
+        if owner_address:
+            try:
+                tx_req = _metamask_tx_request(
+                    pool_contract,
+                    "unban",
+                    [borrower],
+                    from_address=owner_address,
+                )
+                return _metamask_success(
+                    tx_req,
+                    "Use MetaMask (owner wallet) to unban borrower after remedy.",
+                    owner_address,
+                )
+            except Exception as exc:
+                return tool_error(f"Unable to build MetaMask tx: {exc}")
+
+        return tool_error(
+            "Owner wallet not configured. Assign an owner address via MetaMask role assignment or set PRIVATE_KEY."
+        )
 
     register(
         "unban",

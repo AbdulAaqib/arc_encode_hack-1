@@ -251,9 +251,8 @@ def render_chatbot_page() -> None:
             pool_tools_schema, pool_function_map = build_lending_pool_toolkit(
                 w3=w3,
                 pool_contract=pool_contract,
-                usdc_address=usdc_address,
-                usdc_abi=usdc_abi,
-                usdc_decimals=usdc_decimals,
+                token_decimals=usdc_decimals,
+                native_decimals=18,
                 private_key=private_key,
                 default_gas_limit=default_gas_limit,
                 gas_price_gwei=gas_price_gwei,

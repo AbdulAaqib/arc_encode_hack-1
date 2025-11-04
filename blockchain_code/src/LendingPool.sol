@@ -152,14 +152,14 @@ contract LendingPool is Ownable, ReentrancyGuard {
 
         if (trustMintSbt != address(0)) {
             ITrustMintSBT sbt = ITrustMintSBT(trustMintSbt);
-            require(sbt.hasSbt(borrower), "no SBT");
+            require(sbt.hasSbt(borrower), "borrower lacks TrustMint SBT");
             (uint256 score,, bool valid) = sbt.getScore(borrower);
             require(valid, "invalid score");
             require(score >= minScoreToBorrow, "score too low");
         }
 
         Loan storage loan = loans[borrower];
-        require(!loan.active || loan.outstanding == 0, "active loan exists");
+        require(!loan.active || loan.outstanding == 0, "borrower has unpaid loan");
 
         loan.principal = principal;
         loan.outstanding = principal;

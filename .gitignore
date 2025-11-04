@@ -1,28 +1,43 @@
-# Compiler files
+## Compiler files
 cache/
 out/
 
-# Ignores development broadcast logs
+## Ignores development broadcast logs
 !/broadcast
 /broadcast/*/31337/
 /broadcast/**/dry-run/
 
-# Docs
+## Docs
 docs/
 
-# Dotenv file
+## Dotenv file
 .env
-/arc_test/hello-arc/lib
-arc_test/hello-arc/streamlit/.DS_Store
-arc_test/hello-arc/.DS_Store
-arc_test/.DS_Store
 
+## Project artifacts
+/arc_test/hello-arc/lib
+arc_test/.DS_Store
+arc_test/hello-arc/.DS_Store
+arc_test/hello-arc/streamlit/.DS_Store
+blockchain_code/hello-arc/lib
 blockchain_code/lib
 blockchain_code/streamlit/.DS_Store
 .DS_Store
-streamlit/src/frontend/components/__pycache__
 
+## Python caches
+__pycache__/
+streamlit/src/frontend/components/__pycache__/
+streamlit/src/frontend/components/wallet_connect_component/__pycache__/__init__.cpython-313.pyc
+*.py[cod]
+*.pyc
+*$py.class
 
-
+## Frontend build artifacts
 streamlit/src/frontend/components/wallet_connect_component/frontend/node_modules
 streamlit/src/frontend/components/wallet_connect_component/frontend/*.tsbuildinfo
+
+## Virtual environments
+venv/
+streamlit/src/frontend/components/wallet_connect_component/__pycache__/__init__.cpython-313.pyc
+streamlit/src/frontend/components/__pycache__
+streamlit/src/frontend/components/wallet_connect_component/__pycache__/
+/Users/abdulaaqib/Developer/Github/arc_encode_hack/streamlit/src/frontend/components/wallet_connect_component/__pycache__/__init__.cpython-313.pyc
