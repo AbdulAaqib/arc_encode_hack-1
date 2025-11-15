@@ -12,10 +12,6 @@ cachetools==6.2.1
 certifi==2025.10.5
 cffi==2.0.0
 charset-normalizer==3.4.4
-circle-configurations==8.1.1
-circle-developer-controlled-wallets==8.1.1
-circle-user-controlled-wallets==8.1.1
-circle-web3-sdk-util==8.1.1
 ckzg==2.1.5
 click==8.3.0
 cryptography==46.0.3
