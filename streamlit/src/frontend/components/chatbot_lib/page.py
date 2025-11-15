@@ -728,15 +728,12 @@ def render_chatbot_page() -> None:
     sbt_abi_path = os.getenv(TRUSTMINT_SBT_ABI_PATH_ENV)
     sbt_tools_schema: list[Dict[str, Any]] = []
     sbt_function_map: Dict[str, Any] = {}
-<<<<<<< Updated upstream
     sbt_error: str | None = None
     
-=======
     sbt_guard: Optional[Callable[[str], Optional[str]]] = None
->>>>>>> Stashed changes
+    sbt_guard: Optional[Callable[[str], Optional[str]]] = None
     if sbt_address and sbt_abi_path:
         try:
-<<<<<<< Updated upstream
             sbt_abi = load_contract_abi(sbt_abi_path)
             if not sbt_abi:
                 sbt_error = f"ABI file loaded but contains no ABI data: {sbt_abi_path}"
@@ -759,7 +756,6 @@ def render_chatbot_page() -> None:
             sbt_error = str(e)
         except Exception as e:
             sbt_error = f"Unexpected error loading SBT ABI: {e}"
-=======
             sbt_contract = w3.eth.contract(address=Web3.to_checksum_address(sbt_address), abi=sbt_abi)
             sbt_tools_schema, sbt_function_map = build_llm_toolkit(
                 w3=w3,
@@ -772,8 +768,6 @@ def render_chatbot_page() -> None:
             sbt_guard = build_sbt_guard(w3, sbt_contract)
         except Exception:
             pass
->>>>>>> Stashed changes
-
     pool_address = os.getenv(LENDING_POOL_ADDRESS_ENV)
     pool_abi_path = os.getenv(LENDING_POOL_ABI_PATH_ENV)
     usdc_address = os.getenv(USDC_ADDRESS_ENV)
@@ -785,7 +779,6 @@ def render_chatbot_page() -> None:
     
     if pool_address and pool_abi_path:
         try:
-<<<<<<< Updated upstream
             pool_abi = load_contract_abi(pool_abi_path)
             if not pool_abi:
                 pool_error = f"ABI file loaded but contains no ABI data: {pool_abi_path}"
@@ -810,7 +803,6 @@ def render_chatbot_page() -> None:
             pool_error = str(e)
         except Exception as e:
             pool_error = f"Unexpected error loading LendingPool ABI: {e}"
-=======
             pool_contract = w3.eth.contract(address=Web3.to_checksum_address(pool_address), abi=pool_abi)
             pool_tools_schema, pool_function_map = build_lending_pool_toolkit(
                 w3=w3,
@@ -826,8 +818,6 @@ def render_chatbot_page() -> None:
             )
         except Exception:
             pass
->>>>>>> Stashed changes
-
     bridge_tools_schema, bridge_function_map = build_bridge_toolkit()
     state_tools_schema, state_function_map = _build_chatbot_state_tools(chain_id, roles_key, role_addresses)
 
@@ -908,6 +898,11 @@ ls -la blockchain_code/out/LendingPool.sol/LendingPool.json
 # If missing, compile contracts
 cd blockchain_code && forge build""", language="bash")
         
+        return
+
+    resume_mode = resume_pending and not prompt
+
+    if not prompt and not resume_mode:
         return
 
     resume_mode = resume_pending and not prompt

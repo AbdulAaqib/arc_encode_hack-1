@@ -34,19 +34,22 @@ from ..cctp_bridge import (
     resume_arc_to_polygon_bridge,
     transfer_arc_usdc,
 )
-<<<<<<< Updated upstream
+
 from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit
 from ..verification.score_calculator import wallet_summary_to_score
 from ..verification.verification_flow import run_verification_flow
 from ..wallet_connect_component import connect_wallet, wallet_command
 from ..web3_utils import get_web3_client, load_contract_abi
-=======
 from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit, build_sbt_guard
 from ..toolkit_lib.config_utils import resolve_lending_pool_abi_path
 from ..wallet_connect_component import connect_wallet, wallet_command
 from ..web3_utils import get_web3_client, load_contract_abi
 from .logging_utils import get_metamask_logger
->>>>>>> Stashed changes
+from ..toolkit import build_llm_toolkit, build_lending_pool_toolkit, build_sbt_guard
+from ..toolkit_lib.config_utils import resolve_lending_pool_abi_path
+from ..wallet_connect_component import connect_wallet, wallet_command
+from ..web3_utils import get_web3_client, load_contract_abi
+from .logging_utils import get_metamask_logger
 from .rerun import st_rerun
 from .tool_runner import render_tool_runner
 from .constants import (
