@@ -15,6 +15,7 @@ from .cctp_bridge import (
     initiate_arc_to_polygon_bridge,
     polygon_explorer_url,
     resume_arc_to_polygon_bridge,
+    transfer_arc_usdc
 )
 from .wallet_connect_component import connect_wallet, wallet_command
 from .mcp_lib.rerun import st_rerun
