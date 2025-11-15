@@ -6,7 +6,6 @@ using Hypersync. Extracts wallet metrics including transaction count, value move
 unique interactions, and wallet age.
 """
 
-import asyncio
 from typing import Dict, Any
 
 from hypersync import (
@@ -103,22 +102,3 @@ class OnChainVerifier:
             "unique_interactions": unique_interactions,
             "wallet_age_days": wallet_age,
         }
-
-
-# -----------------------------------------------------------
-# Self-test when running the file directly
-# -----------------------------------------------------------
-if __name__ == "__main__":
-    async def main():
-        verifier = OnChainVerifier()
-
-        test_wallet = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"  # Binance wallet example
-
-        print("Running on-chain verifier...\n")
-        summary = await verifier.get_wallet_summary(test_wallet)
-
-        print("=== Result ===")
-        for k, v in summary.items():
-            print(f"{k}: {v}")
-    
-    asyncio.run(main())

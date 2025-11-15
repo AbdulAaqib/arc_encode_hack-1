@@ -6,7 +6,6 @@ Converts wallet summary data to on-chain scores and combines with off-chain scor
 using a weighted formula (60% on-chain, 40% off-chain).
 """
 
-import asyncio
 from typing import Dict, Any
 
 from .onchain_verifier import OnChainVerifier
@@ -156,54 +155,3 @@ class ScoreCalculator:
             "off_chain_score": off_chain_score,
             "final_score": final_score
         }
-
-
-# -----------------------------------------------------------
-# Self-test when running the file directly
-# -----------------------------------------------------------
-if __name__ == "__main__":
-    async def main():
-        print("Testing Score Calculator...\n")
-        
-        # Initialize calculator
-        calculator = ScoreCalculator()
-        
-        # Sample wallet address (Binance wallet example)
-        sample_wallet = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
-        
-        # Sample user profile
-        class MockFile:
-            def __init__(self, mime_type, size):
-                self.type = mime_type
-                self.size = size
-        
-        sample_profile = {
-            "uploaded_files": [
-                MockFile("application/pdf", 50 * 1024),  # 50 KB PDF
-                MockFile("image/png", 30 * 1024)  # 30 KB PNG
-            ],
-            "email": "user@gmail.com",
-            "phone": "+12345678901",
-            "name": "John Doe",
-            "social_link": "https://github.com/johndoe"
-        }
-        
-        print(f"Wallet Address: {sample_wallet}")
-        print(f"User Profile:")
-        print(f"  - Email: {sample_profile['email']}")
-        print(f"  - Phone: {sample_profile['phone']}")
-        print(f"  - Name: {sample_profile['name']}")
-        print(f"  - Social Link: {sample_profile['social_link']}")
-        print(f"  - Files: {len(sample_profile['uploaded_files'])} files\n")
-        
-        print("Computing scores...\n")
-        result = await calculator.compute_score(sample_wallet, sample_profile)
-        
-        print("=== Results ===")
-        print(f"On-chain Score: {result['on_chain_score']}/100")
-        print(f"Off-chain Score: {result['off_chain_score']}/100")
-        print(f"Final Score: {result['final_score']}/100")
-        print()
-        print(f"Calculation: 0.6 × {result['on_chain_score']} + 0.4 × {result['off_chain_score']} = {result['final_score']}")
-    
-    asyncio.run(main())

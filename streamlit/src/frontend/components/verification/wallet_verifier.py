@@ -6,7 +6,6 @@ Provides two-level wallet verification:
 2. On-chain existence check (verifies wallet has on-chain activity)
 """
 
-import asyncio
 from typing import Dict, Any, Tuple
 
 from hypersync import (
@@ -165,52 +164,4 @@ class WalletVerifier:
             "active_onchain": onchain_active,
             "reason": reason
         }
-
-
-# -----------------------------------------------------------
-# Self-test when running the file directly
-# -----------------------------------------------------------
-if __name__ == "__main__":
-    async def main():
-        print("Testing Wallet Verifier...\n")
-        
-        # Initialize verifier
-        verifier = WalletVerifier()
-        
-        # Test wallet address
-        test_wallet = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
-        
-        print(f"Testing wallet: {test_wallet}\n")
-        print("Running verification...\n")
-        
-        result = await verifier.verify_wallet(test_wallet)
-        
-        print("=== Verification Results ===")
-        print(f"Valid Format: {result['valid_format']}")
-        print(f"Active On-chain: {result['active_onchain']}")
-        print(f"Reason: {result['reason']}")
-        print()
-        
-        # Additional test cases
-        print("\n=== Additional Test Cases ===")
-        
-        # Test invalid format (too short)
-        print("\n1. Testing invalid format (too short):")
-        invalid_short = "0x123"
-        result_short = await verifier.verify_wallet(invalid_short)
-        print(f"   Result: {result_short['reason']}")
-        
-        # Test invalid format (no 0x)
-        print("\n2. Testing invalid format (no 0x):")
-        invalid_no_0x = "742d35Cc6634C0532925a3b844Bc454e4438f44e"
-        result_no_0x = await verifier.verify_wallet(invalid_no_0x)
-        print(f"   Result: {result_no_0x['reason']}")
-        
-        # Test zero address
-        print("\n3. Testing zero address:")
-        zero_addr = "0x0000000000000000000000000000000000000000"
-        result_zero = await verifier.verify_wallet(zero_addr)
-        print(f"   Result: {result_zero['reason']}")
-    
-    asyncio.run(main())
 
