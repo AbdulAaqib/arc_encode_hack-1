@@ -167,7 +167,7 @@ if load_dotenv:  # pragma: no cover - executed at runtime
 st.set_page_config(page_title="Credit Dashboard", page_icon="🐶", layout="wide")
 
 # Show full-screen Lottie splash on first load via streamlit-lottie
-_DOTLOTTIE_PATH = "/Users/abdulaaqib/Developer/Github/arc_encode_hack/streamlit/src/frontend/lottie_files/Abstract _Orb.json"
+_DOTLOTTIE_PATH = Path(__file__).parent / "lottie_files" / "Abstract _Orb.json"
 _anim = _load_lottie_any(_DOTLOTTIE_PATH)
 if _anim:
     _show_lottie_splash_streamlit(_anim, duration_ms=6000)
