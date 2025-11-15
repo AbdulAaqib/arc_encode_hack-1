@@ -173,7 +173,7 @@ if load_dotenv:  # pragma: no cover - executed at runtime
     load_dotenv(env_path)
 
 
-st.set_page_config(page_title="Credit Dashboard", page_icon="🐶", layout="wide")
+st.set_page_config(page_title="Sniffer Bank", page_icon="🐶", layout="wide")
 
 # Show full-screen Lottie splash on first load via streamlit-lottie
 _DOTLOTTIE_PATH = Path(__file__).parent / "lottie_files" / "Abstract _Orb.json"
