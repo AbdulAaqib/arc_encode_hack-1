@@ -21,12 +21,12 @@ click==8.3.0
 cryptography==46.0.3
 cytoolz==1.1.0
 distro==1.9.0
-eth-account==0.13.7
+eth-account==0.12.0     
 eth-hash==0.7.1
 eth-keyfile==0.8.1
 eth-keys==0.7.0
 eth-rlp==2.2.0
-eth-typing==5.2.1
+eth-typing==5.2.1 
 eth-utils==5.3.1
 eth_abi==5.2.0
 frozenlist==1.8.0
@@ -55,8 +55,8 @@ protobuf==6.33.0
 pyarrow==21.0.0
 pycparser==2.23
 pycryptodome==3.23.0
-pydantic==2.12.4
-pydantic_core==2.41.5
+pydantic==2.12.4          
+pydantic_core==2.41.5  
 pydeck==0.9.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
@@ -86,3 +86,5 @@ watchdog==6.0.0
 web3==7.14.0
 websockets==15.0.1
 yarl==1.22.0
+hypersync==0.8.4
+eth-account>=0.9.0
