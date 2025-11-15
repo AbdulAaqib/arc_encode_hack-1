@@ -24,7 +24,7 @@ def calculate_final_trust_score(on_chain_score: float, off_chain_score: float) -
     Returns:
         Final trust score rounded and clamped between 0-100
     """
-    final = 0.6 * on_chain_score + 0.4 * off_chain_score
+    final = 0.85 * on_chain_score + 0.15 * off_chain_score
     # Round to nearest integer and clamp between 0-100
     final = max(0, min(100, round(final)))
     return final

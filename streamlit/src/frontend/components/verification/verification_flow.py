@@ -205,10 +205,10 @@ if __name__ == "__main__":
         ]
         
         test_data = {
-            "wallet_address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            "wallet_address": "0x1111111111111111111111111111111111111111",
             "full_name": "John Doe",
             "email": "user@gmail.com",
-            "phone": "+12345678901",
+            "phone": "07450 091422",
             "social_link": "https://github.com/johndoe",
             "uploaded_files": mock_files
         }
