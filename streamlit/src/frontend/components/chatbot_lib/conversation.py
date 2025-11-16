@@ -120,9 +120,7 @@ def run_mcp_llm_conversation(
                                 if tx_request:
                                     # Store pending transaction in session for wallet widget to display
                                     sequence = int(time.time() * 1000)
-                                    st.session_state[
-                                        "chatbot_wallet_pending_command"
-                                    ] = {
+                                    pending_cmd = {
                                         "command": "send_transaction",
                                         "tx_request": tx_request,
                                         "label": metamask_data.get(
@@ -130,6 +128,15 @@ def run_mcp_llm_conversation(
                                         ),
                                         "sequence": sequence,
                                     }
+                                    # Include chainId if specified for the transaction
+                                    if "chainId" in metamask_data:
+                                        pending_cmd["chainId"] = metamask_data["chainId"]
+                                        # Also add it to tx_request for compatibility
+                                        if isinstance(tx_request, dict):
+                                            tx_request["chainId"] = metamask_data["chainId"]
+                                    st.session_state[
+                                        "chatbot_wallet_pending_command"
+                                    ] = pending_cmd
                                     st.session_state["chatbot_needs_tx_rerun"] = True
                                     st.session_state["chatbot_waiting_for_wallet"] = (
                                         True

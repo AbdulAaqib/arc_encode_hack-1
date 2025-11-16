@@ -359,6 +359,29 @@ def build_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     )
 
     def prepare_polygon_mint_tool() -> str:
+        # Check current network FIRST
+        from ..session import DEFAULT_SESSION_KEY
+        cached_wallet = st.session_state.get(DEFAULT_SESSION_KEY, {})
+        current_chain_id = cached_wallet.get("chainId") if isinstance(cached_wallet, dict) else None
+        
+        # Convert hex to int if needed
+        if current_chain_id and isinstance(current_chain_id, str):
+            try:
+                if current_chain_id.startswith("0x"):
+                    current_chain_id = int(current_chain_id, 16)
+                else:
+                    current_chain_id = int(current_chain_id)
+            except:
+                pass
+        
+        # Check if on Polygon network
+        if current_chain_id != POLYGON_AMOY_CHAIN_ID:
+            return tool_error(
+                f"Wrong network! You must switch to Polygon network (chainId {POLYGON_AMOY_CHAIN_ID}) before preparing the mint transaction. "
+                f"Current network chainId: {current_chain_id}. "
+                f"Please call ensureWalletNetwork(target_network='POLYGON') first, wait for confirmation, then try again."
+            )
+        
         bridge_state = st.session_state.get(MCP_BRIDGE_SESSION_KEY)
         if not isinstance(bridge_state, dict):
             return tool_error("No bridge session to prepare Polygon mint for.")
@@ -386,7 +409,7 @@ def build_bridge_toolkit() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         if polygon_address:
             payload["metamask"]["from"] = polygon_address
         st.session_state.setdefault(
-            MCP_POLYGON_STATUS_KEY, {"level": "info", "message": "Polygon mint ready."}
+            MCP_POLYGON_STATUS_KEY, {"level": "info", "message": "Polygon mint ready on correct network."}
         )
         st.session_state.pop(MCP_POLYGON_COMPLETE_KEY, None)
         st.session_state.pop(MCP_POLYGON_LOGS_KEY, None)

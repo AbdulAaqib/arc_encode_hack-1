@@ -1,6 +1,5 @@
 ## Compiler/cache outputs
-cache/
-out/
+
 
 ## Development broadcast logs
 !/broadcast

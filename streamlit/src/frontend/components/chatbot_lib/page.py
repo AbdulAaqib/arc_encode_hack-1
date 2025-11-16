@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from time import time
+import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import streamlit as st
@@ -30,6 +30,7 @@ from ..toolkit import (
     build_sbt_guard,
     render_llm_history,
 )
+from ..toolkit_lib.borrower_bridge_tools import build_borrower_bridge_toolkit
 from ..web3_utils import get_web3_client, load_contract_abi
 from ..wallet_connect_component import wallet_command, connect_wallet
 from ..session import DEFAULT_SESSION_KEY
@@ -51,6 +52,30 @@ CHATBOT_WALLET_COMMAND_KEY = "chatbot_wallet_headless"
 CHATBOT_WALLET_DEBUG_KEY = "chatbot_wallet_auto_status"
 CHATBOT_RESUME_PENDING_KEY = "chatbot_resume_pending_run"
 CHATBOT_PENDING_TX_KEY = "chatbot_pending_tx_state"
+CHATBOT_NETWORK_SWITCH_POLLS_KEY = "chatbot_network_switch_poll_count"
+CHATBOT_TX_SUBMITTED_KEY = "chatbot_tx_already_submitted"
+
+
+def _normalise_chain_id(value: Any) -> Optional[int]:
+    """Convert various chain ID formats to integer."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            # Handle hex format (e.g., "0x13882")
+            return int(stripped, 0)
+        except ValueError:
+            try:
+                # Handle decimal format
+                return int(stripped)
+            except ValueError:
+                return None
+    return None
 
 
 def _normalise_chain_choice(value: str) -> Optional[str]:
@@ -77,28 +102,72 @@ def _get_chain_preference() -> str:
 
 
 def _wallet_flow_blocked() -> bool:
+    """Check if wallet flow is blocked, with timeout handling."""
+    import time
+    
+    # Check pending command with timeout
+    pending_command = st.session_state.get(CHATBOT_PENDING_COMMAND_KEY)
+    if pending_command and isinstance(pending_command, dict):
+        sequence = pending_command.get("sequence")
+        # Timeout after 30 seconds
+        if sequence and (time.time() * 1000 - sequence) > 30000:
+            # Clear stale pending command
+            st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+            st.session_state.pop("chatbot_waiting_for_wallet", None)
+            st.session_state.pop(CHATBOT_TX_SUBMITTED_KEY, None)
+            import logging
+            logger = logging.getLogger("arc.mcp.tools")
+            logger.warning(f"Cleared stale pending command (sequence: {sequence}) after 30s timeout")
+            pending_command = None
+    
+    # Check pending transaction with timeout
+    pending_tx = st.session_state.get(CHATBOT_PENDING_TX_KEY)
+    if pending_tx and isinstance(pending_tx, dict):
+        submitted_at = pending_tx.get("submitted_at")
+        # Timeout after 60 seconds for transaction confirmation
+        if submitted_at and (time.time() - submitted_at) > 60:
+            # Clear stale pending transaction
+            st.session_state.pop(CHATBOT_PENDING_TX_KEY, None)
+            st.session_state.pop("chatbot_waiting_for_wallet", None)
+            import logging
+            logger = logging.getLogger("arc.mcp.tools")
+            logger.warning(f"Cleared stale pending transaction after 60s timeout")
+            pending_tx = None
+    
     return bool(
-        st.session_state.get(CHATBOT_PENDING_COMMAND_KEY)
-        or st.session_state.get(CHATBOT_PENDING_TX_KEY)
+        pending_command
+        or pending_tx
         or st.session_state.get("chatbot_waiting_for_wallet")
     )
 
 
 def _cleanup_pending_tool_calls() -> None:
+    """Drop any trailing assistant tool calls that never received tool responses."""
     messages = st.session_state.get("messages")
     if not isinstance(messages, list) or not messages:
         return
-    
-    while messages:
-        last = messages[-1]
-        if not isinstance(last, dict):
-            break
-        if last.get("role") != "assistant":
-            break
-        tool_calls = last.get("tool_calls")
-        if not tool_calls:
-            break
-        messages.pop()
+
+    pending_indices: Dict[str, int] = {}
+    for idx, message in enumerate(messages):
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role == "assistant":
+            tool_calls = message.get("tool_calls") or []
+            for call in tool_calls:
+                call_id = call.get("id")
+                if call_id:
+                    pending_indices[call_id] = idx
+        elif role == "tool":
+            call_id = message.get("tool_call_id")
+            if call_id and call_id in pending_indices:
+                pending_indices.pop(call_id, None)
+
+    if not pending_indices:
+        return
+
+    cutoff = min(pending_indices.values())
+    del messages[cutoff:]
 
 
 def _build_chatbot_state_tools(
@@ -179,6 +248,8 @@ def _build_chatbot_state_tools(
                 # Clear the result after reading
                 st.session_state.pop(CHATBOT_WALLET_RESULT_KEY, None)
                 st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                st.session_state.pop(CHATBOT_NETWORK_SWITCH_POLLS_KEY, None)
+                st.session_state.pop(CHATBOT_TX_SUBMITTED_KEY, None)
                 cached = _cached_wallet_state()
                 return tool_success({
                     "wallet": cached,
@@ -188,10 +259,24 @@ def _build_chatbot_state_tools(
                     }
                 })
         
-        # Check if there's a pending transaction
+        # Check if there's a pending command
         pending = st.session_state.get(CHATBOT_PENDING_COMMAND_KEY)
         if pending and isinstance(pending, dict):
             if pending.get("command") == "send_transaction":
+                # Check for timeout (30 seconds)
+                sequence = pending.get("sequence")
+                if sequence and (time.time() * 1000 - sequence) > 30000:
+                    # Transaction timed out - clear it
+                    st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                    st.session_state.pop("chatbot_waiting_for_wallet", None)
+                    st.session_state.pop(CHATBOT_TX_SUBMITTED_KEY, None)
+                    cached = _cached_wallet_state()
+                    return tool_success({
+                        "wallet": cached,
+                        "transaction_timeout": True,
+                        "message": "The transaction is taking longer than expected. Please try again."
+                    })
+                
                 cached = _cached_wallet_state()
                 return tool_success({
                     "wallet": cached,
@@ -201,9 +286,67 @@ def _build_chatbot_state_tools(
                         "Keep polling this tool to detect when the transaction is confirmed."
                     )
                 })
+            elif pending.get("command") == "switch_network":
+                # Track polling count for network switches
+                poll_count = st.session_state.get(CHATBOT_NETWORK_SWITCH_POLLS_KEY, 0)
+                poll_count += 1
+                st.session_state[CHATBOT_NETWORK_SWITCH_POLLS_KEY] = poll_count
+                
+                # Stop polling after 3 attempts
+                if poll_count > 3:
+                    st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                    st.session_state.pop(CHATBOT_NETWORK_SWITCH_POLLS_KEY, None)
+                    cached = _cached_wallet_state()
+                    
+                    # Determine which network we're on
+                    current_chain_id = _normalise_chain_id(cached.get("chainId")) if cached else None
+                    network_info = ""
+                    if current_chain_id == 5042002:  # ARC
+                        network_info = " Currently on ARC network (chainId: 0x4cef52, ready for lending operations)."
+                    elif current_chain_id == 80002:  # Polygon
+                        network_info = " Currently on Polygon network (chainId: 0x13882, ready for CCTP mint)."
+                    
+                    return tool_success({
+                        "wallet": cached,
+                        "network_switch_timeout": True,
+                        "message": f"MetaMask didn't switch networks. Please use the manual switch buttons below.{network_info}"
+                    })
+                
+                cached = _cached_wallet_state()
+                # Check if network actually switched
+                current_chain = cached.get("chainId") if cached else None
+                target_chain = pending.get("targetChainId")
+                if current_chain and target_chain:
+                    current_chain_num = _normalise_chain_id(current_chain)
+                    if current_chain_num == target_chain:
+                        # Network switched successfully!
+                        st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                        st.session_state.pop(CHATBOT_NETWORK_SWITCH_POLLS_KEY, None)
+                        
+                        network_name = "ARC" if target_chain == 5042002 else "Polygon" if target_chain == 80002 else f"chain {target_chain}"
+                        return tool_success({
+                            "wallet": cached,
+                            "network_switched": True,
+                            "message": f"Successfully switched to {network_name}"
+                        })
+                
+                return tool_success({
+                    "wallet": cached,
+                    "pending": True,
+                    "message": f"Checking network switch... (attempt {poll_count}/3)"
+                })
         
         cached = _cached_wallet_state()
         if cached and cached.get("address"):
+            # Add network context to the wallet info
+            chain_id = _normalise_chain_id(cached.get("chainId")) if cached else None
+            if chain_id == 5042002:
+                cached["networkName"] = "ARC"
+                cached["networkReady"] = "lending"  # Ready for lending operations
+            elif chain_id == 80002:
+                cached["networkName"] = "Polygon"
+                cached["networkReady"] = "mint"  # Ready for CCTP mint
+            
             return tool_success({"wallet": cached})
         return tool_success({"wallet": None})
 
@@ -212,10 +355,18 @@ def _build_chatbot_state_tools(
         # Check if already connected
         cached = _cached_wallet_state()
         if cached and cached.get("address"):
+            # Add network context
+            chain_id = _normalise_chain_id(cached.get("chainId")) if cached else None
+            if chain_id == 5042002:
+                cached["networkName"] = "ARC"
+                cached["networkReady"] = "lending"
+            elif chain_id == 80002:
+                cached["networkName"] = "Polygon"
+                cached["networkReady"] = "mint"
             return tool_success({"wallet": cached, "message": "Wallet already connected."})
         
         # Set pending flag - widget will trigger MetaMask on next render
-        sequence = int(time() * 1000)
+        sequence = int(time.time() * 1000)
         st.session_state[CHATBOT_PENDING_COMMAND_KEY] = {
             "sequence": sequence,
             "command": "connect",
@@ -230,17 +381,42 @@ def _build_chatbot_state_tools(
             )
         })
 
-    def switch_network_tool() -> str:
-        """Request network switch - user approves via wallet widget."""
-        if expected_chain_id is None:
-            return tool_error("Expected chain id is not configured.")
+    def switch_network_tool(target_network: Optional[str] = None) -> str:
+        """Request network switch automatically via MetaMask."""
+        # Determine target chain based on parameter or default to ARC
+        if target_network and target_network.upper() == "POLYGON":
+            target_chain_id = 80002  # Polygon Amoy testnet
+            network_name = "Polygon"
+        else:
+            # Default to ARC
+            target_chain_id = expected_chain_id
+            network_name = "ARC"
+            
+        if target_chain_id is None:
+            return tool_error("Target chain id is not configured.")
         
+        # Reset poll counter for new switch attempt
+        st.session_state.pop(CHATBOT_NETWORK_SWITCH_POLLS_KEY, None)
+        
+        # Set pending command to trigger automatic network switch
+        sequence = int(time.time() * 1000)
+        st.session_state[CHATBOT_PENDING_COMMAND_KEY] = {
+            "sequence": sequence,
+            "command": "switch_network",
+            "targetChainId": target_chain_id,
+        }
+        # Trigger rerun so wallet widget picks up the command
+        st.session_state["chatbot_needs_tx_rerun"] = True
+        st.session_state["chatbot_waiting_for_wallet"] = True
+        
+        # Return with pending flag - polling is now handled in get_wallet_tool
         return tool_success({
+            "pending": True,
             "message": (
-                "Please use the wallet widget at the top of the page to switch to the ARC network. "
-                "Click the 'Switch Network' button if it appears."
+                f"Switching to {network_name} network. Please check MetaMask and approve the switch."
             ),
-            "targetChainId": expected_chain_id
+            "targetChainId": target_chain_id,
+            "targetNetwork": network_name
         })
 
     def get_roles_tool() -> str:
@@ -322,9 +498,19 @@ def _build_chatbot_state_tools(
 
     register(
         "ensureWalletNetwork",
-        "Request MetaMask to switch to the ARC network.",
-        {"type": "object", "properties": {}, "required": []},
-        lambda: switch_network_tool(),
+        "Request MetaMask to switch to ARC or Polygon network. Defaults to ARC if not specified.",
+        {
+            "type": "object",
+            "properties": {
+                "target_network": {
+                    "type": "string",
+                    "description": "Target network to switch to: 'ARC' or 'POLYGON'. Defaults to ARC.",
+                    "enum": ["ARC", "POLYGON"]
+                }
+            },
+            "required": []
+        },
+        switch_network_tool,
     )
 
     register(
@@ -378,6 +564,7 @@ def render_chatbot_page() -> None:
     )
     
     # Always-visible wallet widget for agentic MetaMask interactions
+    # Default to Arc chain ID
     try:
         chain_id_wallet = w3.eth.chain_id if (w3 := get_web3_client(os.getenv(ARC_RPC_ENV))) else None
     except:
@@ -392,15 +579,39 @@ def render_chatbot_page() -> None:
     headless_payload = None
     if pending_action and isinstance(pending_action, dict):
         action_type = pending_action.get("command")
-        if action_type == "send_transaction":
+        if action_type == "switch_network":
+            # Handle network switch command
+            target_chain = pending_action.get("targetChainId")
+            st.info("🔄 Please check MetaMask and approve the network switch.")
+            sequence = pending_action.get("sequence")
+            if sequence is None:
+                sequence = int(time.time() * 1000)
+                pending_action["sequence"] = sequence
+                st.session_state[CHATBOT_PENDING_COMMAND_KEY] = pending_action
+            
+            # Mark that we need to trigger network switch through the main wallet component
+            if not pending_action.get("headless_triggered"):
+                pending_action["headless_triggered"] = True
+                pending_action["needs_wallet_command"] = True
+                st.session_state[CHATBOT_PENDING_COMMAND_KEY] = pending_action
+            
+        elif action_type == "send_transaction":
             tx_req = pending_action.get("tx_request")
             action_hint = "eth_sendTransaction"
             tx_label = pending_action.get("label", "Confirm Transaction")
-            st.info("🔄 Sending transaction to MetaMask... Approve the popup to continue.")
-            lock_sequence = st.session_state.get(CHATBOT_HEADLESS_LOCK_KEY)
+            
+            # Check if this transaction was already submitted
             sequence = pending_action.get("sequence")
+            submitted_sequences = st.session_state.get(CHATBOT_TX_SUBMITTED_KEY, set())
+            if sequence and sequence in submitted_sequences:
+                st.info("⏳ Transaction already submitted. Waiting for confirmation...")
+                tx_req = None  # Don't submit again
+            else:
+                st.info("🔄 Sending transaction to MetaMask... Approve the popup to continue.")
+            
+            lock_sequence = st.session_state.get(CHATBOT_HEADLESS_LOCK_KEY)
             if sequence is None:
-                sequence = int(time() * 1000)
+                sequence = int(time.time() * 1000)
                 pending_action["sequence"] = sequence
                 st.session_state[CHATBOT_PENDING_COMMAND_KEY] = pending_action
             
@@ -410,7 +621,7 @@ def render_chatbot_page() -> None:
             if (
                 debug_state.get("headless_invoked")
                 and isinstance(last_invoked_at, (int, float))
-                and (time() - float(last_invoked_at)) > 6
+                and (time.time() - float(last_invoked_at)) > 6
             ):
                 should_retry = True
                 st.session_state.pop(CHATBOT_HEADLESS_LOCK_KEY, None)
@@ -418,7 +629,7 @@ def render_chatbot_page() -> None:
                 lock_sequence = None
                 debug_state["headless_invoked"] = False
                 debug_state["headless_invoked_at"] = None
-                debug_state["auto_retry_at"] = time()
+                debug_state["auto_retry_at"] = time.time()
 
             debug_state.update(
                 {
@@ -427,7 +638,7 @@ def render_chatbot_page() -> None:
                     "tx_hint": tx_label,
                     "tx_value": tx_req.get("value") if isinstance(tx_req, dict) else None,
                     "tx_to": tx_req.get("to") if isinstance(tx_req, dict) else None,
-                    "invoked_at": time(),
+                    "invoked_at": time.time(),
                 }
             )
             st.session_state[CHATBOT_WALLET_DEBUG_KEY] = debug_state
@@ -448,18 +659,313 @@ def render_chatbot_page() -> None:
                 st.session_state[CHATBOT_PENDING_COMMAND_KEY] = pending_action
                 debug_state = st.session_state.get(CHATBOT_WALLET_DEBUG_KEY, {})
                 debug_state["headless_invoked"] = True
-                debug_state["headless_invoked_at"] = time()
+                debug_state["headless_invoked_at"] = time.time()
                 st.session_state[CHATBOT_WALLET_DEBUG_KEY] = debug_state
 
-    wallet_info = connect_wallet(
-        key="chatbot_wallet_connector",
-        require_chain_id=chain_id_wallet,
-        tx_request=tx_req,
-        action=action_hint,
-        tx_label=tx_label,
-        autoconnect=True,
-        auto_submit=bool(tx_req),
-    )
+    # Show network switch button if automatic switch is needed
+    if pending_action and pending_action.get("command") == "switch_network":
+        target_chain = pending_action.get("targetChainId")
+        
+        # Determine network name
+        if target_chain == 80002:
+            network_name = "Polygon"
+        else:
+            network_name = "ARC"
+        
+        # Show retry button after initial attempt
+        if pending_action.get("headless_triggered"):
+            st.warning(f"⚠️ If MetaMask popup didn't appear, click below to retry:")
+            if st.button(f"🔄 Retry Switch to {network_name}", key="network_switch_button", type="primary"):
+                # Force a new sequence to ensure React re-executes
+                pending_action["sequence"] = int(time.time() * 1000)
+                pending_action["needs_wallet_command"] = True
+                st.session_state[CHATBOT_PENDING_COMMAND_KEY] = pending_action
+                st.rerun()
+        
+        # Manual network switch buttons for direct MetaMask interaction
+        st.info("💡 Or use these direct network switch buttons:")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 Manual Switch to ARC", key="manual_arc_switch"):
+                # Direct JavaScript execution to switch network
+                st.components.v1.html("""
+                <script>
+                if (window.ethereum) {
+                    console.log('[Manual Switch] Attempting to switch to ARC network (0x4cef52)...');
+                    window.ethereum.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: '0x4cef52' }]
+                    }).then(() => {
+                        console.log('[Manual Switch] Successfully switched to ARC!');
+                        // Force page reload after switch
+                        window.parent.location.reload();
+                    }).catch((error) => {
+                        console.error('[Manual Switch] Network switch failed:', error);
+                        // If network not added, try to add it
+                        if (error.code === 4902) {
+                            console.log('[Manual Switch] Adding ARC network...');
+                            window.ethereum.request({
+                                method: 'wallet_addEthereumChain',
+                                params: [{
+                                    chainId: '0x4cef52',
+                                    chainName: 'Arc Testnet',
+                                    nativeCurrency: {
+                                        name: 'USDC',
+                                        symbol: 'USDC',
+                                        decimals: 6
+                                    },
+                                    rpcUrls: ['https://rpc.testnet.arc.network'],
+                                    blockExplorerUrls: ['https://testnet.arcscan.app']
+                                }]
+                            }).then(() => {
+                                window.parent.location.reload();
+                            });
+                        }
+                    });
+                } else {
+                    alert('MetaMask not found! Please install MetaMask to switch networks.');
+                }
+                </script>
+                """, height=0)
+        with col2:
+            if st.button("🔄 Manual Switch to Polygon", key="manual_polygon_switch"):
+                st.components.v1.html("""
+                <script>
+                if (window.ethereum) {
+                    console.log('[Manual Switch] Attempting to switch to Polygon network (0x13882)...');
+                    window.ethereum.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: '0x13882' }]
+                    }).then(() => {
+                        console.log('[Manual Switch] Successfully switched to Polygon!');
+                        // Force page reload after switch
+                        window.parent.location.reload();
+                    }).catch((error) => {
+                        console.error('[Manual Switch] Network switch failed:', error);
+                        // If network not added, try to add it
+                        if (error.code === 4902) {
+                            console.log('[Manual Switch] Adding Polygon Amoy network...');
+                            window.ethereum.request({
+                                method: 'wallet_addEthereumChain',
+                                params: [{
+                                    chainId: '0x13882',
+                                    chainName: 'Polygon Amoy Testnet',
+                                    nativeCurrency: {
+                                        name: 'MATIC',
+                                        symbol: 'MATIC',
+                                        decimals: 18
+                                    },
+                                    rpcUrls: ['https://rpc-amoy.polygon.technology'],
+                                    blockExplorerUrls: ['https://amoy.polygonscan.com']
+                                }]
+                            }).then(() => {
+                                window.parent.location.reload();
+                            });
+                        }
+                    });
+                } else {
+                    alert('MetaMask not found! Please install MetaMask to switch networks.');
+                }
+                </script>
+                """, height=0)
+    
+    # Check if transaction should be auto-submitted
+    should_auto_submit = False
+    if tx_req and pending_action:
+        sequence = pending_action.get("sequence")
+        submitted_sequences = st.session_state.get(CHATBOT_TX_SUBMITTED_KEY, set())
+        if not isinstance(submitted_sequences, set):
+            submitted_sequences = set()
+        
+        # Only auto-submit if not already submitted
+        if sequence and sequence not in submitted_sequences:
+            should_auto_submit = True
+            # Mark as submitted to prevent duplicates
+            submitted_sequences.add(sequence)
+            st.session_state[CHATBOT_TX_SUBMITTED_KEY] = submitted_sequences
+            
+            import logging
+            logger = logging.getLogger("arc.mcp.tools")
+            logger.info(f"Transaction {sequence} marked for auto-submit (first time)")
+        else:
+            import logging
+            logger = logging.getLogger("arc.mcp.tools")
+            logger.info(f"Transaction {sequence} already submitted, skipping auto-submit")
+    
+    # Build wallet component args
+    # Use a unique key when there's a command to ensure React re-renders and executes it
+    component_key = "chatbot_wallet_connector"
+    if pending_action and pending_action.get("command") == "switch_network" and pending_action.get("sequence"):
+        component_key = f"chatbot_wallet_connector_{pending_action.get('sequence')}"
+    
+    # Determine the expected chain ID based on the operation
+    # If we're doing a Polygon mint (CCTP), expect Polygon chain
+    expected_chain = chain_id_wallet
+    if pending_action:
+        # Check if this is a Polygon operation (CCTP mint)
+        tx_label_lower = (tx_label or "").lower()
+        # Check the tx_request for chainId hint
+        tx_chain_id = None
+        if tx_req and isinstance(tx_req, dict):
+            # Check if chainId is specified in the transaction request
+            tx_chain_id = tx_req.get("chainId")
+            if tx_chain_id:
+                if isinstance(tx_chain_id, str) and tx_chain_id.startswith("0x"):
+                    tx_chain_id = int(tx_chain_id, 16)
+                elif isinstance(tx_chain_id, str):
+                    tx_chain_id = int(tx_chain_id)
+        
+        if tx_chain_id:
+            expected_chain = tx_chain_id
+        elif "polygon" in tx_label_lower or "mint" in tx_label_lower or "cctp" in tx_label_lower:
+            expected_chain = 80002  # Polygon Amoy
+        # Also check if we're switching to Polygon
+        elif pending_action.get("command") == "switch_network":
+            target = pending_action.get("targetChainId")
+            if target:
+                expected_chain = target
+    
+    wallet_args = {
+        "key": component_key,
+        "require_chain_id": expected_chain,
+        "tx_request": tx_req,
+        "action": action_hint,
+        "tx_label": tx_label,
+        "autoconnect": True,
+        "auto_submit": should_auto_submit,  # Only auto-submit once
+    }
+    
+    # Add network switch command if needed (without headless mode for proper user interaction)
+    if pending_action and pending_action.get("command") == "switch_network" and pending_action.get("needs_wallet_command"):
+        target_chain = pending_action.get("targetChainId")
+        sequence = pending_action.get("sequence")
+        wallet_args.update({
+            # Remove headless mode - network switch needs interactive UI for MetaMask popup
+            "command": "switch_network",
+            "command_sequence": sequence,
+            "command_payload": {"require_chain_id": target_chain},
+        })
+        # Update the required chain for the switch
+        wallet_args["require_chain_id"] = target_chain
+        expected_chain = target_chain  # Update expected chain for UI display
+        
+        # Debug logging
+        import logging
+        logger = logging.getLogger("arc.mcp.tools")
+        logger.info(f"Sending network switch command to wallet component (interactive mode): target_chain={target_chain}, sequence={sequence}")
+    
+    # Debug: Log wallet args when there's a network switch command
+    if pending_action and pending_action.get("command") == "switch_network":
+        import logging
+        logger = logging.getLogger("arc.mcp.tools")
+        logger.info(f"Wallet args for network switch: {wallet_args}")
+        st.info(f"🔍 Sending network switch to wallet component with key: {component_key}")
+    
+    # Debug: Show expected chain for transactions
+    if tx_req and expected_chain:
+        import logging
+        logger = logging.getLogger("arc.mcp.tools")
+        logger.info(f"Transaction expects chain {expected_chain} (hex: {hex(expected_chain)}), label: {tx_label}")
+        if tx_req and isinstance(tx_req, dict):
+            logger.info(f"Transaction chainId in request: {tx_req.get('chainId')}")
+    
+    # Always render the wallet component (now with command if needed)
+    wallet_info = connect_wallet(**wallet_args)
+    
+    # Debug what the wallet component returns
+    if wallet_info:
+        st.info(f"ℹ️ MetaMask payload received: {wallet_info}")
+    
+    # Don't clear the needs_wallet_command flag immediately - wait for command completion
+    # This ensures the command persists across Streamlit reruns until executed
+    
+    headless_payload = wallet_info if pending_action else None
+    
+    if headless_payload:
+        import logging
+        logger = logging.getLogger("arc.mcp.tools")
+        logger.info(f"Wallet component returned from headless mode: {headless_payload}")
+        
+    # Debug info for network switch
+    if pending_action and pending_action.get("command") == "switch_network":
+        target_chain = pending_action.get("targetChainId")
+        if target_chain == 80002:
+            st.info(f"⚠️ Switching to Polygon network...")
+        else:
+            st.info(f"⚠️ Switching to ARC network...")
+    
+    # Always show manual network switch options for convenience
+    if wallet_info and wallet_info.get("chainId"):
+        current_chain = _normalise_chain_id(wallet_info.get("chainId"))
+        with st.expander("🔄 Quick Network Switch", expanded=False):
+            st.write(f"Current network: {'ARC' if current_chain == 5042002 else 'Polygon' if current_chain == 80002 else 'Unknown'}")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Switch to ARC", key="quick_switch_arc", disabled=(current_chain == 5042002)):
+                    st.components.v1.html("""
+                    <script>
+                    if (window.ethereum) {
+                        window.ethereum.request({
+                            method: 'wallet_switchEthereumChain',
+                            params: [{ chainId: '0x4cef52' }]
+                        }).then(() => {
+                            window.parent.location.reload();
+                        }).catch((error) => {
+                            if (error.code === 4902) {
+                                window.ethereum.request({
+                                    method: 'wallet_addEthereumChain',
+                                    params: [{
+                                        chainId: '0x4cef52',
+                                        chainName: 'Arc Testnet',
+                                        nativeCurrency: {
+                                            name: 'USDC',
+                                            symbol: 'USDC',
+                                            decimals: 6
+                                        },
+                                        rpcUrls: ['https://rpc.testnet.arc.network'],
+                                        blockExplorerUrls: ['https://testnet.arcscan.app']
+                                    }]
+                                }).then(() => {
+                                    window.parent.location.reload();
+                                });
+                            }
+                        });
+                    }
+                    </script>
+                    """, height=0)
+            with col2:
+                if st.button("Switch to Polygon", key="quick_switch_polygon", disabled=(current_chain == 80002)):
+                    st.components.v1.html("""
+                    <script>
+                    if (window.ethereum) {
+                        window.ethereum.request({
+                            method: 'wallet_switchEthereumChain',
+                            params: [{ chainId: '0x13882' }]
+                        }).then(() => {
+                            window.parent.location.reload();
+                        }).catch((error) => {
+                            if (error.code === 4902) {
+                                window.ethereum.request({
+                                    method: 'wallet_addEthereumChain',
+                                    params: [{
+                                        chainId: '0x13882',
+                                        chainName: 'Polygon Amoy Testnet',
+                                        nativeCurrency: {
+                                            name: 'MATIC',
+                                            symbol: 'MATIC',
+                                            decimals: 18
+                                        },
+                                        rpcUrls: ['https://rpc-amoy.polygon.technology'],
+                                        blockExplorerUrls: ['https://amoy.polygonscan.com']
+                                    }]
+                                }).then(() => {
+                                    window.parent.location.reload();
+                                });
+                            }
+                        });
+                    }
+                    </script>
+                    """, height=0)
     
     def _receipt_field(receipt: Any, field: str) -> Any:
         if isinstance(receipt, dict):
@@ -484,6 +990,7 @@ def render_chatbot_page() -> None:
             st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
             st.session_state.pop(CHATBOT_WALLET_DEBUG_KEY, None)
             st.session_state.pop("chatbot_waiting_for_wallet", None)
+            st.session_state.pop(CHATBOT_TX_SUBMITTED_KEY, None)
             st.session_state[CHATBOT_RESUME_PENDING_KEY] = True
             return payload
         if pending_snapshot and tx_hash and status not in {"error"}:
@@ -491,7 +998,7 @@ def render_chatbot_page() -> None:
                 "txHash": tx_hash,
                 "chainId": payload.get("chainId"),
                 "hint": pending_snapshot.get("label") or pending_snapshot.get("hint"),
-                "submitted_at": time(),
+                "submitted_at": time.time(),
             }
             st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
             st.session_state.pop(CHATBOT_WALLET_DEBUG_KEY, None)
@@ -504,6 +1011,37 @@ def render_chatbot_page() -> None:
             st.session_state.pop("chatbot_waiting_for_wallet", None)
             st.session_state[CHATBOT_RESUME_PENDING_KEY] = True
             return payload
+        # Handle network switch completion
+        if pending_snapshot and pending_snapshot.get("command") == "switch_network":
+            # Check if switch was successful by comparing current chain with target
+            if status == "switched":
+                # Explicit success from frontend
+                st.session_state[CHATBOT_WALLET_RESULT_KEY] = payload
+                # Clear the pending action including needs_wallet_command flag
+                st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                st.session_state.pop(CHATBOT_WALLET_DEBUG_KEY, None)
+                st.session_state.pop("chatbot_waiting_for_wallet", None)
+                st.session_state.pop(CHATBOT_NETWORK_SWITCH_POLLS_KEY, None)
+                st.session_state[CHATBOT_RESUME_PENDING_KEY] = True
+                return payload
+            elif payload.get("chainId"):
+                # Check if chain ID matches target
+                current_chain = _normalise_chain_id(payload.get("chainId"))
+                target_chain = pending_snapshot.get("targetChainId")
+                if current_chain and target_chain and current_chain == target_chain:
+                    # Network switched successfully!
+                    import logging
+                    logger = logging.getLogger("arc.mcp.tools")
+                    logger.info(f"Network switch detected: current chain {current_chain} matches target {target_chain}")
+                    payload["network_switched"] = True
+                    st.session_state[CHATBOT_WALLET_RESULT_KEY] = payload
+                    # Clear the pending action including needs_wallet_command flag
+                    st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                    st.session_state.pop(CHATBOT_WALLET_DEBUG_KEY, None)
+                    st.session_state.pop("chatbot_waiting_for_wallet", None)
+                    st.session_state.pop(CHATBOT_NETWORK_SWITCH_POLLS_KEY, None)
+                    st.session_state[CHATBOT_RESUME_PENDING_KEY] = True
+                    return payload
         return None
 
     result_payload: Optional[Dict[str, Any]] = None
@@ -585,24 +1123,25 @@ def render_chatbot_page() -> None:
             else:
                 st.write(f"**Command:** {debug_state.get('command') or 'unknown'}")
                 st.write(f"**Sequence:** {debug_state.get('sequence', '—')}")
-                if debug_state.get("headless_invoked"):
-                    st.success("Headless wallet command invoked; waiting for MetaMask.")
+                if debug_state.get("headless_invoked") or (pending_action and pending_action.get("command") == "switch_network"):
+                    st.success("Wallet command invoked; waiting for MetaMask popup.")
                 else:
-                    st.info("Preparing headless wallet command…")
+                    st.info("Preparing wallet command…")
                 if wallet_info and wallet_info.get("address"):
                     st.write(f"**Connected wallet:** {wallet_info['address']}")
                 else:
                     st.warning("Wallet not connected yet – connect MetaMask to continue.")
-                if wallet_info and wallet_info.get("chainId") and chain_id_wallet:
-                    chain_matches = str(wallet_info["chainId"]).lower() == hex(chain_id_wallet).lower()
+                if wallet_info and wallet_info.get("chainId") and expected_chain:
+                    chain_matches = str(wallet_info["chainId"]).lower() == hex(expected_chain).lower()
                     if chain_matches:
                         st.success(f"Chain OK ({wallet_info['chainId']}).")
                     else:
-                        st.warning(f"Switch wallet to chain id {chain_id_wallet} before MetaMask can submit.")
+                        expected_name = "Polygon" if expected_chain == 80002 else "Arc" if expected_chain == 5042002 else f"chain {expected_chain}"
+                        st.warning(f"Please switch to {expected_name} network using the buttons below.")
                 if pending_tx_state:
                     st.info(f"⏳ Waiting for on-chain confirmation of `{pending_tx_state.get('txHash', 'unknown')}`…")
-                elif not debug_state.get("headless_invoked"):
-                    st.write("Waiting for headless wallet command to run. If this takes longer than a few seconds, click retry below.")
+                elif not debug_state.get("headless_invoked") and not (pending_action and pending_action.get("command") == "switch_network"):
+                    st.write("Waiting for wallet command to execute. If this takes longer than a few seconds, click retry below.")
                 payload = debug_state.get("last_component_payload")
                 if payload:
                     st.write("**Latest wallet component payload:**")
@@ -612,11 +1151,11 @@ def render_chatbot_page() -> None:
                 if pending_snapshot and tx_req and not pending_tx_state:
                     if st.button("Retry MetaMask command", key="chatbot_retry_wallet_command"):
                         pending_snapshot = dict(pending_snapshot)
-                        pending_snapshot["sequence"] = int(time() * 1000)
+                        pending_snapshot["sequence"] = int(time.time() * 1000)
                         pending_snapshot.pop("headless_executed", None)
                         st.session_state.pop(CHATBOT_HEADLESS_LOCK_KEY, None)
                         st.session_state[CHATBOT_PENDING_COMMAND_KEY] = pending_snapshot
-                        debug_state["retry_requested_at"] = time()
+                        debug_state["retry_requested_at"] = time.time()
                         st.session_state[CHATBOT_WALLET_DEBUG_KEY] = debug_state
                         st.rerun()
 
@@ -673,7 +1212,22 @@ def render_chatbot_page() -> None:
 
     if prompt_blocked:
         with st.chat_message("assistant"):
-            st.info("I'm still waiting for the previous wallet transaction to finish. Approve it in MetaMask or wait for confirmation.")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.info("I'm still waiting for the previous wallet transaction to finish. Approve it in MetaMask or wait for confirmation.")
+            with col2:
+                if st.button("🔄 Clear & Retry", key="clear_wallet_block"):
+                    # Clear all wallet-related blocking states
+                    st.session_state.pop(CHATBOT_PENDING_COMMAND_KEY, None)
+                    st.session_state.pop(CHATBOT_PENDING_TX_KEY, None)
+                    st.session_state.pop("chatbot_waiting_for_wallet", None)
+                    st.session_state.pop(CHATBOT_TX_SUBMITTED_KEY, None)
+                    st.session_state.pop(CHATBOT_WALLET_DEBUG_KEY, None)
+                    st.session_state.pop(CHATBOT_HEADLESS_LOCK_KEY, None)
+                    import logging
+                    logger = logging.getLogger("arc.mcp.tools")
+                    logger.info("User manually cleared wallet blocking states")
+                    st.rerun()
         prompt = None
 
     if client is None:
@@ -840,16 +1394,15 @@ def render_chatbot_page() -> None:
         except Exception:
             pass
     bridge_tools_schema, bridge_function_map = build_bridge_toolkit()
+    borrower_bridge_tools_schema, borrower_bridge_function_map = build_borrower_bridge_toolkit()
     state_tools_schema, state_function_map = _build_chatbot_state_tools(chain_id, roles_key, role_addresses)
 
-    bridge_tools_schema, bridge_function_map = build_bridge_toolkit()
-    state_tools_schema, state_function_map = _build_chatbot_state_tools(chain_id, roles_key, role_addresses)
-
-    tools_schema = sbt_tools_schema + pool_tools_schema + bridge_tools_schema + state_tools_schema
+    tools_schema = sbt_tools_schema + pool_tools_schema + bridge_tools_schema + borrower_bridge_tools_schema + state_tools_schema
     function_map: Dict[str, Callable[..., str]] = {}
     function_map.update(sbt_function_map)
     function_map.update(pool_function_map)
     function_map.update(bridge_function_map)
+    function_map.update(borrower_bridge_function_map)
     function_map.update(state_function_map)
 
     if not tools_schema:

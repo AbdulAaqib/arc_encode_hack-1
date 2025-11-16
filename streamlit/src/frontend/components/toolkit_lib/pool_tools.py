@@ -344,11 +344,20 @@ def build_lending_pool_toolkit(
         getLoan_tool,
     )
 
-    def isBanned_tool(borrower_address: str) -> str:
+    def isBanned_tool(
+        borrower_address: Optional[str] = None, wallet_address: Optional[str] = None
+    ) -> str:
+        address_input = borrower_address or wallet_address
+        if not address_input:
+            return tool_error(
+                "Borrower address is required. Provide `borrower_address` or `wallet_address`."
+            )
         try:
-            borrower = Web3.to_checksum_address(borrower_address)
+            borrower = Web3.to_checksum_address(address_input)
             banned = bool(getattr(pool_contract.functions, "isBanned")(borrower).call())
             return tool_success({"borrower": borrower, "banned": banned})
+        except ValueError:
+            return tool_error("Borrower address is not valid.")
         except Exception as exc:
             return tool_error(f"Read failed: {exc}")
 
@@ -361,9 +370,13 @@ def build_lending_pool_toolkit(
                 "borrower_address": {
                     "type": "string",
                     "description": "Borrower wallet address.",
-                }
+                },
+                "wallet_address": {
+                    "type": "string",
+                    "description": "Alias for borrower_address; included for compatibility.",
+                },
             },
-            "required": ["borrower_address"],
+            "required": [],
         },
         isBanned_tool,
     )

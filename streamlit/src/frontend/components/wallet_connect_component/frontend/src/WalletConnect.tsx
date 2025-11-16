@@ -38,7 +38,7 @@ const CHAIN_METADATA: Record<number, ChainMetadata> = {
     chainName: "Arc Testnet",
     rpcUrls: ["https://rpc.testnet.arc.network"],
     blockExplorerUrls: ["https://testnet.arcscan.app"],
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
   },
   80002: {
     chainName: "Polygon PoS Amoy",
@@ -86,6 +86,7 @@ export default function WalletConnect(): JSX.Element {
   const [info, setInfo] = useState<WalletInfo>({ isConnected: false })
   const [sending, setSending] = useState<boolean>(false)
   const [txResult, setTxResult] = useState<any>(undefined)
+  const [executingCommand, setExecutingCommand] = useState<boolean>(false)
   
   const setValue = useCallback((payload: unknown) => {
     Streamlit.setComponentValue(payload)
@@ -393,26 +394,32 @@ export default function WalletConnect(): JSX.Element {
   }, [txRequest])
 
   useEffect(() => {
-    if (mode !== "headless") {
-      return
-    }
+    console.log('[WalletConnect] Command effect triggered', { mode, command, commandSequence, commandPayload })
+    // Execute commands in both headless AND interactive modes
     if (!command || commandSequence === undefined) {
+      console.log('[WalletConnect] Missing command or sequence, skipping')
       return
     }
     if (lastCommandRef.current === commandSequence) {
+      console.log('[WalletConnect] Command already executed for sequence', commandSequence)
       return
     }
     lastCommandRef.current = commandSequence
+    console.log('[WalletConnect] ✅ EXECUTING COMMAND:', command, 'with sequence:', commandSequence, 'in mode:', mode)
 
     const run = async () => {
+      setExecutingCommand(true)
       const eth = window.ethereum
       const base: Record<string, any> = { command, commandSequence }
       if (!eth) {
         const msg = "No injected wallet found. Install MetaMask to continue."
+        console.error('[WalletConnect]', msg)
         setValue({ ...base, error: msg })
+        setExecutingCommand(false)
         return
       }
       try {
+        console.log('[WalletConnect] Processing command:', command)
         switch (command) {
           case "connect": {
             const accounts: string[] = await eth.request({ method: "eth_requestAccounts" })
@@ -432,11 +439,13 @@ export default function WalletConnect(): JSX.Element {
           }
           case "switch_network": {
             const targetChain = commandPayload?.require_chain_id ?? requireChainId
+            console.log('[WalletConnect] Switch network requested to:', targetChain, 'from payload:', commandPayload)
             const targetNum = chainIdToNumber(targetChain)
             if (!targetNum) {
               throw new Error("No target chain id supplied for switch_network command.")
             }
             const targetHex = "0x" + targetNum.toString(16)
+            console.log('[WalletConnect] Target chain hex:', targetHex, 'decimal:', targetNum)
             const metadata = getChainMetadata(targetNum)
             const chainAddParams = metadata
               ? [{
@@ -448,6 +457,7 @@ export default function WalletConnect(): JSX.Element {
                 }]
               : [{ chainId: targetHex }]
             try {
+              console.log('[WalletConnect] Requesting MetaMask to switch to chain:', targetHex)
               await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] })
             } catch (switchErr: any) {
               if (switchErr?.code === 4902) {
@@ -487,14 +497,34 @@ export default function WalletConnect(): JSX.Element {
       } catch (err: any) {
         const msg = err?.message ?? String(err)
         setValue({ ...base, error: msg })
+        setExecutingCommand(false)
       }
+      setExecutingCommand(false)
     }
 
     run()
   }, [mode, command, commandSequence, commandPayload, requireChainId, info.address, info.chainId, action, txRequest, setValue, sendTransaction])
 
-  if (mode === "headless") {
-    return <div style={{ display: "none" }} />
+  // Don't hide component in headless mode - network switch needs UI interaction
+  // Component will still execute commands but remain visible for MetaMask popups
+
+  // Show status while executing network switch
+  if (executingCommand && command === "switch_network") {
+    return (
+      <div style={{
+        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, sans-serif",
+        padding: "1rem",
+        textAlign: "center",
+        color: "#666",
+        border: `1px solid ${borderColor}`,
+        borderRadius: 8,
+        background: "#fff",
+        boxShadow: "0 1px 2px rgba(0,0,0,0.06)"
+      }}>
+        <div>🔄 Requesting network switch...</div>
+        <div style={{ fontSize: "0.875rem", marginTop: "0.5rem" }}>Please check your MetaMask popup</div>
+      </div>
+    )
   }
 
   return (

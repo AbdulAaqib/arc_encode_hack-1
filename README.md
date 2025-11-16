@@ -113,7 +113,7 @@ AZURE_OPENAI_API_VERSION=2024-06-01
 AZURE_OPENAI_CHAT_DEPLOYMENT=your_deployment_name  # e.g., gpt-4o-mini / gpt-4o
 
 # Arc RPC + signing key (LOCAL DEV ONLY — never commit or share)
-ARC_TESTNET_RPC_URL=https://arc-testnet.example.rpc  # replace with actual Arc testnet RPC
+ARC_TESTNET_RPC_URL=https://rpc.testnet.arc.network  # Arc Testnet RPC
 PRIVATE_KEY=0xabc123...  # test-only key with minimal funds
 
 # SBT contract (used by the MCP Tools UI)
@@ -220,7 +220,7 @@ For the MVP, pool functions are not yet implemented on‑chain. Seed liquidity d
 
 - USDC‑native gas model enables predictable fees and smooth UX.
 - EVM‑compatible, sub‑second finality; easy integration with wallets and tooling.
-- Replace example RPC endpoints and USDC addresses with Arc testnet values for your environment.
+- The Arc testnet RPC endpoint is https://rpc.testnet.arc.network (Chain ID: 5042002)
 
 ---
 
@@ -247,4 +247,4 @@ For the MVP, pool functions are not yet implemented on‑chain. Seed liquidity d
 
 - This repository is for hackathon/demo use on testnets. Do not use real keys or funds.
 - Use a dedicated test wallet with minimal funds for `PRIVATE_KEY`.
-- RPC endpoints and USDC addresses differ per network; replace placeholders with actual Arc testnet values.
+- Arc testnet uses USDC as native currency. Network details: RPC: https://rpc.testnet.arc.network, Chain ID: 5042002, Explorer: https://testnet.arcscan.app
