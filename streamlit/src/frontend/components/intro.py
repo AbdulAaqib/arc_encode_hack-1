@@ -290,7 +290,7 @@ def _show_dog_gif() -> None:
         if video_b64:
             st.markdown(
                 f"""
-                <video autoplay loop muted playsinline style="border-radius:20px;margin:0 auto 1.5rem auto; margin-bottom: 2rem;">
+                <video autoplay loop muted playsinline style="display:block;border-radius:20px;margin:0 auto 1.5rem auto; margin-bottom: 2rem;">
                   <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
                 </video>
                 """,
