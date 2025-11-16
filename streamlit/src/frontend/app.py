@@ -144,7 +144,7 @@ def _show_gif_splash_once(file_path: str) -> None:
   {media_tag}
 </div>
 <script>
-  (function() {{
+  document.addEventListener('DOMContentLoaded', function() {{
     const media = document.getElementById('splash-media');
     const overlay = document.getElementById('splash-overlay');
     
@@ -165,7 +165,7 @@ def _show_gif_splash_once(file_path: str) -> None:
     
     // Always hide after 6 seconds (matches CSS animation)
     setTimeout(hideOverlay, 6000);
-  }})();
+  }});
 </script>
             """
             st.markdown(html, unsafe_allow_html=True)
@@ -252,11 +252,9 @@ if _SPLASH_PATH.exists():
 
 active_page = render_navigation()
 
-if active_page == "Intro":
+if active_page == "SnifferBank Home":
     render_intro_page()
 elif active_page == "Chatbot":
     render_chatbot_page()
-elif active_page == "Wallet":
-    render_wallet_page()
 else:
     render_mcp_tools_page()

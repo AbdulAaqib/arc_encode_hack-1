@@ -1,113 +1,196 @@
-"""Intro page component showing credit metrics and invoice analytics."""
+"""Hero-style intro page with playful PawChain copy."""
 
 from __future__ import annotations
 
-import json
-from typing import Any, Optional
-
+import time
+from pathlib import Path
 import os
+from typing import Optional
+
 import pandas as pd
 import streamlit as st
 from web3 import Web3
-from web3.exceptions import Web3Exception
+
+from .config import (
+    ARC_RPC_ENV,
+    LENDING_POOL_ADDRESS_ENV,
+    LENDING_POOL_ABI_PATH_ENV,
+    USDC_DECIMALS_ENV,
+)
+from .web3_utils import get_web3_client, load_contract_abi
+
+INTRO_VISIT_KEY = "pawchain_intro_visited"
+HERO_ASSETS = [
+    Path(__file__).resolve().parents[1] / "gifs" / "sniffer_bank.gif",
+]
+LIQ_HISTORY_KEY = "intro_liquidity_history"
 
 
-@st.cache_resource(show_spinner=False)
-def get_web3_client(rpc: str) -> Optional[Web3]:
-    """Return a connected Web3 client for the supplied RPC endpoint."""
+def _stream_text(text: str, delay: float = 0.04):
+    """Yield text one character at a time for a typewriter effect."""
 
-    if not rpc:
+    for char in text:
+        yield char
+        time.sleep(delay)
+
+
+def _show_hero_image(target: Optional[st.delta_generator.DeltaGenerator] = None) -> None:
+    container = target or st
+    for asset in HERO_ASSETS:
+        if not asset.exists():
+            continue
+        suffix = asset.suffix.lower()
+        try:
+            if suffix in {".gif", ".png", ".jpg", ".jpeg"}:
+                container.image(str(asset), width=220)
+                return
+            if suffix in {".mp4", ".mov", ".webm"}:
+                container.video(str(asset))
+                return
+        except Exception:
+            continue
+    container.caption("🐾 (Hero animation unavailable)")
+
+
+def _fetch_available_liquidity_usdc() -> Optional[float]:
+    rpc_url = os.getenv(ARC_RPC_ENV)
+    pool_address = os.getenv(LENDING_POOL_ADDRESS_ENV)
+    abi_path = os.getenv(LENDING_POOL_ABI_PATH_ENV)
+    decimals = int(os.getenv(USDC_DECIMALS_ENV, "6"))
+    if not (rpc_url and pool_address and abi_path):
         return None
-    client = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 10}))
-    return client if client.is_connected() else None
+    try:
+        w3 = get_web3_client(rpc_url)
+        if w3 is None:
+            return None
+        abi = load_contract_abi(abi_path)
+        if not abi:
+            return None
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(pool_address), abi=abi
+        )
+        raw_units = contract.functions.availableLiquidity().call()
+        return raw_units / (10**decimals)
+    except Exception:
+        return None
 
 
-def _resolve_session_dataframe(session_key: str) -> Optional[pd.DataFrame]:
-    value = st.session_state.get(session_key)
-    return value if isinstance(value, pd.DataFrame) else None
+def _liquidity_history() -> list[float]:
+    history = st.session_state.get(LIQ_HISTORY_KEY)
+    if isinstance(history, list) and history:
+        return history
+    seed = [2.4, 2.45, 2.42, 2.46, 2.5]
+    st.session_state[LIQ_HISTORY_KEY] = seed
+    return seed
+
+
+def _update_liquidity_history(value: Optional[float]) -> list[float]:
+    history = list(_liquidity_history())
+    if value is not None:
+        history.append(value)
+        history = history[-25:]
+        st.session_state[LIQ_HISTORY_KEY] = history
+    return history
 
 
 def render_intro_page() -> None:
-    """Render the intro page with metric tiles and optional invoice table."""
+    """Render the whimsical PawChain landing page."""
 
-    st.title("🐶 PawChain Capital Credit Dashboard")
+    st.title("🏠 SnifferBank Home")
 
-    env_rpc = os.getenv("ARC_TESTNET_RPC_URL", "https://rpc.testnet.arc.network")
-    rpc_url = st.session_state.get("rpc_url") or env_rpc
-    wallet_address = st.session_state.get("wallet_address")
-    contract_address = st.session_state.get("contract_address")
-    abi_text = st.session_state.get("contract_abi")
-    df = _resolve_session_dataframe("invoice_df")
+    hero_col, spark_col = st.columns([1, 1])
 
-    w3 = get_web3_client(rpc_url) if rpc_url else None
-    if rpc_url and not w3:
-        st.warning("Unable to connect to the provided RPC endpoint. Double-check the URL or network status.")
+    liquidity_value = _fetch_available_liquidity_usdc()
+    liquidity_series = _update_liquidity_history(liquidity_value)
+    liquidity_usdc = liquidity_series
+    latest_liq = liquidity_usdc[-1]
+    delta_liq = liquidity_usdc[-1] - liquidity_usdc[-2] if len(liquidity_usdc) > 1 else 0
+    chart_df = pd.DataFrame({"liquidity": [round(val, 3) for val in liquidity_usdc]})
 
-    balance = _fetch_wallet_balance(w3, wallet_address) if w3 and wallet_address else None
-    avg_delay, invoice_count = _compute_invoice_metrics(df)
-    credit_score = _fetch_credit_score(w3, wallet_address, contract_address, abi_text)
+    if not st.session_state.get(INTRO_VISIT_KEY):
+        st.session_state[INTRO_VISIT_KEY] = True
+        st.write_stream(
+            _stream_text("Welcome to SnifferBank — where every ledger has a loyal watchdog 🐾")
+        )
+        _show_hero_image(hero_col)
+        st.balloons()
+    else:
+        _show_hero_image(hero_col)
+        st.caption("Welcome back to the Sniffer! Grab a biscuit and keep sniffing. 🦴")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Wallet Balance (USDC)", f"{balance:.2f}" if balance is not None else "—")
-    col2.metric("Avg Payment Delay (days)", f"{avg_delay:.1f}" if avg_delay is not None else "—")
-    col3.metric("Invoice Count", invoice_count if invoice_count is not None else "—")
+    with spark_col:
+        spark_col.caption("ARC Pool Liquidity (USDC)")
+        help_text = (
+            "Live availableLiquidity via LendingPool contract"
+            if liquidity_value is not None
+            else "Env/LendingPool config missing — showing cached mock data"
+        )
+        spark_col.metric(
+            label="Available Liquidity",
+            value=f"{latest_liq:.2f} USDC",
+            delta=f"{delta_liq:+.2f}",
+            chart_data=chart_df,
+            help=help_text,
+            border=True,
+        )
 
-    if credit_score is not None:
-        st.markdown("### Credit Registry Snapshot")
-        st.json({"creditScore": credit_score[0], "metadata": credit_score[1:], "raw": credit_score})
+    st.subheader("🐾 Welcome to Sniffer Bank")
+    st.markdown(
+        """
+Sniffer Bank is Collie’s playground — our resident credit hound who can sniff out reliable borrowers faster than you can say “fetch.”  
+We’re building cheeky, data-backed credit rails for the on-chain world, layering invoice analytics, credit registries, and wallet telemetry so lenders stay in the know while borrowers get wag-worthy experiences.
 
-    if df is not None:
-        st.markdown("### Invoice Overview")
-        st.dataframe(df)
+Collie’s daily routine: **Fetch invoices**, **Chase delinquent payments**, and **sit beside risk teams** with real-time insights.
+        """
+    )
 
-        numeric_cols = df.select_dtypes(include=["number"]).columns
-        if len(numeric_cols) > 0:
-            with st.expander("Numeric column trends"):
-                st.line_chart(df[numeric_cols])
+    st.subheader("Pack Leaders")
+    col1, col2, col3, col4 = st.columns(4, vertical_alignment="top")
 
+    with col1:
+        with st.container(border=True, height=320):
+            st.subheader("Abdul 🐕")
+            st.markdown("**Backend & Blockchain**")
+            st.write(
+                "Keeps the lending contracts obedient and wires wallet flows so every bridge prompt feels like a belly rub."
+            )
+            st.markdown(
+                "🔗 [GitHub](https://github.com/AbdulAaqib) | 💼 [LinkedIn](https://www.linkedin.com/in/abdulaaqib/)"
+            )
 
-def _fetch_wallet_balance(web3_client: Web3, wallet_address: str) -> Optional[float]:
-    try:
-        checksum_address = Web3.to_checksum_address(wallet_address)
-        raw_balance = web3_client.eth.get_balance(checksum_address)
-        return raw_balance / (10**18)
-    except ValueError:
-        st.error("Wallet address is invalid. Please enter a valid checksum address.")
-    except Web3Exception as exc:  # pragma: no cover - UI feedback only
-        st.error(f"Failed to fetch balance: {exc}")
-    except Exception as exc:  # pragma: no cover - UI feedback only
-        st.error(f"Unexpected error fetching balance: {exc}")
-    return None
+    with col2:
+        with st.container(border=True, height=320):
+            st.subheader("Junaid 🔧")
+            st.markdown("**DevOps & Engineering Wrangler**")
+            st.write(
+                "Keeps infra leashes tight, deployments zoomie-free, and Streamlit sessions hydrated for every fetch request."
+            )
+            st.markdown(
+                "🔗 [GitHub](https://github.com/Junaid2005) | 💼 [LinkedIn](https://www.linkedin.com/in/junaid-mohammad-4a4091260/)"
+            )
 
+    with col3:
+        with st.container(border=True, height=320):
+            st.subheader("Sukhran 🛠️")
+            st.markdown("**Backend & Blockchain**")
+            st.write(
+                "Former chew-toy engineer, now architecting ledgers Collie trusts for borrower scoring and ARC liquidity."
+            )
+            st.markdown(
+                "💼 [LinkedIn](https://www.linkedin.com/in/mohammed-talat-28064a1b2/)"
+            )
 
-def _compute_invoice_metrics(df: Optional[pd.DataFrame]) -> tuple[Optional[float], Optional[int]]:
-    if df is None:
-        return None, None
-    invoice_count = len(df)
-    avg_delay = float(df["days_to_payment"].mean()) if "days_to_payment" in df.columns else None
-    return avg_delay, invoice_count
+    with col4:
+        with st.container(border=True, height=320):
+            st.subheader("Walid 🦮")
+            st.markdown("**Lead Strategy**")
+            st.write(
+                "Decides which hydrants we conquer next, pairing market instincts with Collie-approved borrower journeys."
+            )
+            st.markdown("💼 [LinkedIn](https://www.linkedin.com/in/walid-m-155819267/)")
 
-
-def _fetch_credit_score(
-    web3_client: Optional[Web3],
-    wallet_address: Optional[str],
-    contract_address: Optional[str],
-    abi_text: Optional[str],
-) -> Optional[Any]:
-    if not (web3_client and wallet_address and contract_address and abi_text):
-        return None
-
-    try:
-        abi = json.loads(abi_text)
-        contract = web3_client.eth.contract(address=Web3.to_checksum_address(contract_address), abi=abi)
-        return contract.functions.scores(Web3.to_checksum_address(wallet_address)).call()
-    except json.JSONDecodeError:
-        st.error("ABI is not valid JSON. Please paste a valid ABI array.")
-    except ValueError as exc:  # includes bad addresses
-        st.error(f"Contract interaction error: {exc}")
-    except Web3Exception as exc:  # pragma: no cover - UI feedback only
-        st.error(f"Unable to query contract: {exc}")
-    except Exception as exc:  # pragma: no cover - UI feedback only
-        st.error(f"Unexpected contract error: {exc}")
-    return None
+    st.divider()
+    st.info(
+        "Curious where to start? Hop into the Chatbot tab, connect MetaMask on Arc Testnet, and ask Doggo for a guided fetch mission."
+    )
 

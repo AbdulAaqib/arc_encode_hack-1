@@ -1233,9 +1233,6 @@ def render_mcp_tools_page() -> None:
 
     w3 = get_web3_client(rpc_url)
 
-    st.divider()
-    st.subheader("MetaMask Role Assignment")
-
     chain_id = None
     try:
         chain_id = w3.eth.chain_id if w3 else None
@@ -1252,60 +1249,6 @@ def render_mcp_tools_page() -> None:
     role_addresses.setdefault("Lender", "")
     role_addresses.setdefault("Borrower", "")
 
-    # Wallet widget for role assignment
-    st.markdown("**Connect your wallet to assign it to a role:**")
-
-    wallet_info = connect_wallet(
-        key="role_assignment_wallet",
-        require_chain_id=chain_id,
-        preferred_address=role_addresses.get("Owner")
-        or role_addresses.get("Lender")
-        or role_addresses.get("Borrower"),
-        autoconnect=True,
-    )
-
-    wallet_error = None
-    wallet_warning = None
-    wallet_status = None
-    current_address = None
-    if isinstance(wallet_info, dict):
-        current_address = wallet_info.get("address")
-        wallet_error = wallet_info.get("error")
-        wallet_warning = wallet_info.get("warning")
-        wallet_status = wallet_info.get("status")
-
-    assignment_col, info_col = st.columns([2, 1])
-
-    with assignment_col:
-        role_choice = st.selectbox(
-            "Assign connected wallet to role",
-            ["Owner", "Lender", "Borrower"],
-            key="role_assignment_choice",
-        )
-        if current_address:
-            st.success(f"✅ Connected: {current_address[:6]}...{current_address[-4:]}")
-            if st.button("Assign to role", key="assign_role_button"):
-                role_addresses[role_choice] = current_address
-                st.session_state[roles_key] = role_addresses
-                st.toast(f"Assigned {current_address} to {role_choice}", icon="✅")
-        elif wallet_error:
-            st.error(f"MetaMask error: {wallet_error}")
-        elif wallet_warning:
-            st.warning(f"MetaMask warning: {wallet_warning}")
-        elif wallet_status:
-            st.info(f"MetaMask status: {wallet_status}")
-        else:
-            st.info(
-                "Use the wallet widget above to connect MetaMask, then assign your role."
-            )
-
-    with info_col:
-        st.caption("Stored role addresses")
-        st.json(role_addresses)
-
-    # User Verification Section
-    _render_verification_section()
-
     owner_pk = os.getenv(PRIVATE_KEY_ENV)
     lender_pk = os.getenv("LENDER_PRIVATE_KEY")
     borrower_pk = os.getenv("BORROWER_PRIVATE_KEY")
@@ -1316,118 +1259,179 @@ def render_mcp_tools_page() -> None:
         "Borrower": borrower_pk,
     }
 
-    st.divider()
-    st.subheader("Signing sources")
-    for role_name in ("Owner", "Lender", "Borrower"):
-        pk_value = role_private_keys.get(role_name)
-        addr = role_addresses.get(role_name)
-        if pk_value:
-            st.caption(
-                f"{role_name}: env private key configured for automatic signing."
+    wallet_info_for_bridge: Optional[Dict[str, Any]] = None
+
+    tab_roles, tab_verification, tab_toolkits, tab_bridge = st.tabs(
+        [
+            "🦴 Wallet & Roles",
+            "🔍 User Verification",
+            "🧰 Toolkits",
+            "🌉 ARC Bridge",
+        ]
+    )
+
+    with tab_roles:
+        st.subheader("MetaMask Role Assignment")
+        st.markdown("Connect your wallet and map it to Owner, Lender, or Borrower roles.")
+
+        wallet_info = connect_wallet(
+            key="role_assignment_wallet",
+            require_chain_id=chain_id,
+            preferred_address=role_addresses.get("Owner")
+            or role_addresses.get("Lender")
+            or role_addresses.get("Borrower"),
+            autoconnect=True,
+        )
+        wallet_info_for_bridge = wallet_info if isinstance(wallet_info, dict) else None
+
+        wallet_error = None
+        wallet_warning = None
+        wallet_status = None
+        current_address = None
+        if isinstance(wallet_info, dict):
+            current_address = wallet_info.get("address")
+            wallet_error = wallet_info.get("error")
+            wallet_warning = wallet_info.get("warning")
+            wallet_status = wallet_info.get("status")
+
+        assignment_col, info_col = st.columns([2, 1])
+
+        with assignment_col:
+            role_choice = st.selectbox(
+                "Assign connected wallet to role",
+                ["Owner", "Lender", "Borrower"],
+                key="role_assignment_choice",
             )
-        elif addr:
-            st.caption(f"{role_name}: MetaMask wallet {addr} will sign when required.")
+            if current_address:
+                st.success(f"✅ Connected: {current_address[:6]}...{current_address[-4:]}")
+                if st.button("Assign to role", key="assign_role_button"):
+                    role_addresses[role_choice] = current_address
+                    st.session_state[roles_key] = role_addresses
+                    st.toast(f"Assigned {current_address} to {role_choice}", icon="✅")
+            elif wallet_error:
+                st.error(f"MetaMask error: {wallet_error}")
+            elif wallet_warning:
+                st.warning(f"MetaMask warning: {wallet_warning}")
+            elif wallet_status:
+                st.info(f"MetaMask status: {wallet_status}")
+            else:
+                st.info("Use the wallet widget above to connect MetaMask, then assign your role.")
+
+        with info_col:
+            st.caption("Stored role addresses")
+            st.json(role_addresses)
+
+        st.markdown("### Signing sources")
+        for role_name in ("Owner", "Lender", "Borrower"):
+            pk_value = role_private_keys.get(role_name)
+            addr = role_addresses.get(role_name)
+            if pk_value:
+                st.caption(f"{role_name}: env private key configured for automatic signing.")
+            elif addr:
+                st.caption(f"{role_name}: MetaMask wallet {addr} will sign when required.")
+            else:
+                st.caption(f"{role_name}: no signer configured yet; assign a MetaMask wallet above.")
+
+    with tab_verification:
+        _render_verification_section()
+
+    with tab_toolkits:
+        st.subheader("TrustMint SBT Tools")
+
+        sbt_address_env = get_sbt_address()
+        sbt_address = sbt_address_env[0]
+        sbt_env_name = sbt_address_env[1] or SBT_ADDRESS_ENV
+        sbt_abi_path = os.getenv(TRUSTMINT_SBT_ABI_PATH_ENV)
+
+        sbt_tools_schema = []
+        sbt_function_map = {}
+        sbt_guard = None
+        if sbt_address and sbt_abi_path and w3 is not None:
+            sbt_abi = load_contract_abi(sbt_abi_path)
+            try:
+                sbt_contract = w3.eth.contract(
+                    address=Web3.to_checksum_address(sbt_address), abi=sbt_abi
+                )
+                sbt_tools_schema, sbt_function_map = build_llm_toolkit(
+                    w3=w3,
+                    contract=sbt_contract,
+                    token_decimals=0,
+                    private_key=owner_pk,
+                    default_gas_limit=default_gas_limit,
+                    gas_price_gwei=gas_price_gwei,
+                )
+                sbt_guard = build_sbt_guard(w3, sbt_contract)
+            except Exception as exc:
+                st.warning(f"Unable to build SBT toolkit: {exc}")
+
+        if not sbt_tools_schema:
+            st.info(
+                f"Set `{sbt_env_name}` and `{TRUSTMINT_SBT_ABI_PATH_ENV}` in `.env` to enable TrustMint SBT tools."
+            )
         else:
-            st.caption(
-                f"{role_name}: no signer configured yet; assign a MetaMask wallet above."
-            )
-
-    st.divider()
-    st.subheader("TrustMint SBT Tools")
-
-    sbt_address_env = get_sbt_address()
-    sbt_address = sbt_address_env[0]
-    sbt_env_name = sbt_address_env[1] or SBT_ADDRESS_ENV
-    sbt_abi_path = os.getenv(TRUSTMINT_SBT_ABI_PATH_ENV)
-
-    sbt_tools_schema = []
-    sbt_function_map = {}
-    sbt_guard = None
-    if sbt_address and sbt_abi_path and w3 is not None:
-        sbt_abi = load_contract_abi(sbt_abi_path)
-        try:
-            sbt_contract = w3.eth.contract(
-                address=Web3.to_checksum_address(sbt_address), abi=sbt_abi
-            )
-            sbt_tools_schema, sbt_function_map = build_llm_toolkit(
-                w3=w3,
-                contract=sbt_contract,
-                token_decimals=0,
-                private_key=owner_pk,
-                default_gas_limit=default_gas_limit,
-                gas_price_gwei=gas_price_gwei,
-            )
-            sbt_guard = build_sbt_guard(w3, sbt_contract)
-        except Exception as exc:
-            st.warning(f"Unable to build SBT toolkit: {exc}")
-
-    if not sbt_tools_schema:
-        st.info(
-            f"Set `{sbt_env_name}` and `{TRUSTMINT_SBT_ABI_PATH_ENV}` in `.env` to enable TrustMint SBT tools."
-        )
-    else:
-        render_tool_runner(
-            sbt_tools_schema,
-            sbt_function_map,
-            w3,
-            key_prefix="sbt",
-            role_private_keys=role_private_keys,
-            role_addresses=role_addresses,
-            tool_role_map=SBT_TOOL_ROLES,
-        )
-
-    st.divider()
-    st.subheader("LendingPool Tools")
-
-    pool_address = os.getenv(LENDING_POOL_ADDRESS_ENV)
-    pool_abi_path = os.getenv(LENDING_POOL_ABI_PATH_ENV)
-    usdc_address = os.getenv(USDC_ADDRESS_ENV)
-    usdc_abi_path = os.getenv(USDC_ABI_PATH_ENV)
-    usdc_decimals = int(os.getenv(USDC_DECIMALS_ENV, "6"))
-
-    pool_tools_schema = []
-    pool_function_map = {}
-    if pool_address and pool_abi_path and w3 is not None:
-        pool_abi = load_contract_abi(pool_abi_path)
-        usdc_abi = load_contract_abi(usdc_abi_path) if usdc_abi_path else None
-        try:
-            pool_contract = w3.eth.contract(
-                address=Web3.to_checksum_address(pool_address), abi=pool_abi
-            )
-            pool_tools_schema, pool_function_map = build_lending_pool_toolkit(
-                w3=w3,
-                pool_contract=pool_contract,
-                token_decimals=usdc_decimals,
-                native_decimals=18,
-                private_key=owner_pk,
-                default_gas_limit=default_gas_limit,
-                gas_price_gwei=gas_price_gwei,
-                role_addresses=role_addresses,
+            render_tool_runner(
+                sbt_tools_schema,
+                sbt_function_map,
+                w3,
+                key_prefix="sbt",
                 role_private_keys=role_private_keys,
-                borrower_guard=sbt_guard,
+                role_addresses=role_addresses,
+                tool_role_map=SBT_TOOL_ROLES,
             )
-        except Exception as exc:
-            st.warning(f"Unable to build LendingPool toolkit: {exc}")
 
-    if not pool_tools_schema:
-        st.info(
-            "Set `LENDING_POOL_ADDRESS`, `LENDING_POOL_ABI_PATH`, and optional USDC env vars to enable LendingPool tools."
-        )
-    else:
-        parameter_defaults = {
-            "deposit": {"amount": 0.1},
-            "withdraw": {"amount": 0.1},
-            "openLoan": {"principal": 0.1, "term_seconds": 604800},
-        }
-        render_tool_runner(
-            pool_tools_schema,
-            pool_function_map,
-            w3,
-            key_prefix="pool",
-            parameter_defaults=parameter_defaults,
-            role_private_keys=role_private_keys,
-            role_addresses=role_addresses,
-            tool_role_map=POOL_TOOL_ROLES,
-        )
+        st.divider()
+        st.subheader("LendingPool Tools")
 
-    _render_cctp_bridge_section(role_addresses, wallet_info)
+        pool_address = os.getenv(LENDING_POOL_ADDRESS_ENV)
+        pool_abi_path = os.getenv(LENDING_POOL_ABI_PATH_ENV)
+        usdc_address = os.getenv(USDC_ADDRESS_ENV)
+        usdc_abi_path = os.getenv(USDC_ABI_PATH_ENV)
+        usdc_decimals = int(os.getenv(USDC_DECIMALS_ENV, "6"))
+
+        pool_tools_schema = []
+        pool_function_map = {}
+        if pool_address and pool_abi_path and w3 is not None:
+            pool_abi = load_contract_abi(pool_abi_path)
+            usdc_abi = load_contract_abi(usdc_abi_path) if usdc_abi_path else None
+            try:
+                pool_contract = w3.eth.contract(
+                    address=Web3.to_checksum_address(pool_address), abi=pool_abi
+                )
+                pool_tools_schema, pool_function_map = build_lending_pool_toolkit(
+                    w3=w3,
+                    pool_contract=pool_contract,
+                    token_decimals=usdc_decimals,
+                    native_decimals=18,
+                    private_key=owner_pk,
+                    default_gas_limit=default_gas_limit,
+                    gas_price_gwei=gas_price_gwei,
+                    role_addresses=role_addresses,
+                    role_private_keys=role_private_keys,
+                    borrower_guard=sbt_guard,
+                )
+            except Exception as exc:
+                st.warning(f"Unable to build LendingPool toolkit: {exc}")
+
+        if not pool_tools_schema:
+            st.info(
+                "Set `LENDING_POOL_ADDRESS`, `LENDING_POOL_ABI_PATH`, and optional USDC env vars to enable LendingPool tools."
+            )
+        else:
+            parameter_defaults = {
+                "deposit": {"amount": 0.1},
+                "withdraw": {"amount": 0.1},
+                "openLoan": {"principal": 0.1, "term_seconds": 604800},
+            }
+            render_tool_runner(
+                pool_tools_schema,
+                pool_function_map,
+                w3,
+                key_prefix="pool",
+                parameter_defaults=parameter_defaults,
+                role_private_keys=role_private_keys,
+                role_addresses=role_addresses,
+                tool_role_map=POOL_TOOL_ROLES,
+            )
+
+    with tab_bridge:
+        _render_cctp_bridge_section(role_addresses, wallet_info_for_bridge)

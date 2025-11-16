@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import streamlit as st
@@ -54,6 +55,82 @@ CHATBOT_RESUME_PENDING_KEY = "chatbot_resume_pending_run"
 CHATBOT_PENDING_TX_KEY = "chatbot_pending_tx_state"
 CHATBOT_NETWORK_SWITCH_POLLS_KEY = "chatbot_network_switch_poll_count"
 CHATBOT_TX_SUBMITTED_KEY = "chatbot_tx_already_submitted"
+
+GIFS_DIR = Path(__file__).resolve().parents[1] / "gifs"
+GIF_ASSETS = {
+    "sbt": GIFS_DIR / "sbt_token_given.gif",
+    "loan": GIFS_DIR / "loan_given.gif",
+    "bridge": GIFS_DIR / "thinking_2.gif",
+    "idle": GIFS_DIR / "thinking_1.gif",
+}
+GIF_CAPTIONS = {
+    "sbt": "Issuing or verifying TrustMint credentials…",
+    "loan": "Processing loan and repayment workflows on Arc…",
+    "bridge": "Handling CCTP bridging and Polygon settlement steps…",
+    "idle": "Coordinating MCP tools…",
+}
+SBT_KEYWORDS = ("sbt", "score", "trustmint")
+LOAN_KEYWORDS = ("loan", "repay", "deposit", "withdraw", "ban", "pool", "lender", "borrower")
+BRIDGE_KEYWORDS = ("bridge", "polygon", "mint", "burn", "attestation", "transfer", "arctransfer")
+
+
+def _resolve_task_category(task_hint: Optional[str]) -> str:
+    if not task_hint:
+        return "idle"
+    hint = str(task_hint).lower()
+    if any(keyword in hint for keyword in SBT_KEYWORDS):
+        return "sbt"
+    if any(keyword in hint for keyword in LOAN_KEYWORDS):
+        return "loan"
+    if any(keyword in hint for keyword in BRIDGE_KEYWORDS):
+        return "bridge"
+    return "idle"
+
+
+def _get_task_gif(task_hint: Optional[str]) -> tuple[Optional[Path], str]:
+    category = _resolve_task_category(task_hint)
+    path = GIF_ASSETS.get(category)
+    caption = GIF_CAPTIONS.get(category, GIF_CAPTIONS["idle"])
+    if path and path.exists():
+        return path, caption
+    fallback = GIF_ASSETS.get("idle")
+    if fallback and fallback.exists():
+        return fallback, caption
+    return None, caption
+
+
+def _derive_task_hint_from_state(
+    pending_action: Optional[Dict[str, Any]],
+    pending_tx_state: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    if pending_action:
+        label = pending_action.get("label") or pending_action.get("hint")
+        if label:
+            return label
+        command = pending_action.get("command")
+        target = pending_action.get("targetNetwork") or pending_action.get("targetChainId")
+        if target:
+            return f"{command}_{target}"
+        return command
+    if pending_tx_state:
+        return pending_tx_state.get("hint") or pending_tx_state.get("txHash")
+    return None
+
+
+class TaskGifDisplay:
+    """Utility to render task-specific GIFs inside the chat UI."""
+
+    def __init__(self) -> None:
+        self._image_placeholder = st.empty()
+        self._caption_placeholder = st.empty()
+
+    def show(self, task_hint: Optional[str]) -> None:
+        path, caption = _get_task_gif(task_hint)
+        if path and path.exists():
+            self._image_placeholder.image(str(path), use_column_width=True)
+        else:
+            self._image_placeholder.empty()
+        self._caption_placeholder.caption(caption)
 
 
 def _normalise_chain_id(value: Any) -> Optional[int]:
@@ -231,13 +308,20 @@ def _build_chatbot_state_tools(
 
     def set_pref_tool(chain: str) -> str:
         choice = _normalise_chain_choice(chain)
-        if choice is None:
-            return tool_error("Chain preference must be either 'ARC' or 'POLYGON'.")
-        st.session_state[CHAIN_PREF_SESSION_KEY] = choice
-        return tool_success({"chain_preference": choice})
+        if choice != "ARC":
+            return tool_error(
+                "Polygon delivery is temporarily disabled; loans can only be disbursed on ARC."
+            )
+        st.session_state[CHAIN_PREF_SESSION_KEY] = "ARC"
+        return tool_success({"chain_preference": "ARC"})
 
     def list_chains_tool() -> str:
-        return tool_success({"availableChains": ["ARC", "POLYGON"]})
+        return tool_success(
+            {
+                "availableChains": ["ARC"],
+                "message": "Polygon delivery via CCTP is paused until the loan ledger is updated.",
+            }
+        )
 
     def get_wallet_tool() -> str:
         """Get wallet state from session - user must connect via UI."""
@@ -1117,7 +1201,7 @@ def render_chatbot_page() -> None:
     pending_snapshot = pending_action if isinstance(pending_action, dict) else None
     pending_tx_state = st.session_state.get(CHATBOT_PENDING_TX_KEY)
     if tx_req or debug_state or pending_tx_state:
-        with st.expander("Wallet automation status", expanded=True):
+        with st.expander("Wallet automation status", expanded=False):
             if not debug_state and not pending_tx_state:
                 st.write("No automation metadata yet.")
             else:
@@ -1487,23 +1571,41 @@ cd blockchain_code && forge build""", language="bash")
         return
 
     waves = load_lottie_json(WAVES_PATH)
-    spinner_text = "Resuming wallet-dependent workflow…" if resume_mode and not prompt else "GPT 5 is orchestrating MCP tools…"
+    spinner_text = (
+        "Resuming wallet-dependent workflow…"
+        if resume_mode and not prompt
+        else "GPT 5 is orchestrating MCP tools…"
+    )
 
-    if waves:
-        from streamlit_lottie import st_lottie_spinner
+    def _run_conversation_with_status(callback: Callable[[Optional[str]], None]) -> None:
+        run_mcp_llm_conversation(
+            client,
+            deployment,
+            st.session_state.messages,
+            tools_schema,
+            function_map,
+            wallet_widget_callback=None,
+            status_callback=callback,
+        )
 
-        with st.chat_message("assistant"):
+    with st.chat_message("assistant"):
+        gif_display = TaskGifDisplay()
+        initial_hint = _derive_task_hint_from_state(
+            pending_action,
+            st.session_state.get(CHATBOT_PENDING_TX_KEY),
+        )
+        gif_display.show(initial_hint)
+
+        if waves:
+            from streamlit_lottie import st_lottie_spinner
+
             with st_lottie_spinner(waves, key="waves_spinner"):
-                run_mcp_llm_conversation(
-                    client, deployment, st.session_state.messages, tools_schema, function_map,
-                    wallet_widget_callback=None
-                )
-    else:
-        with st.spinner(spinner_text):
-            run_mcp_llm_conversation(
-                client, deployment, st.session_state.messages, tools_schema, function_map,
-                wallet_widget_callback=None
-            )
+                _run_conversation_with_status(gif_display.show)
+        else:
+            with st.spinner(spinner_text):
+                _run_conversation_with_status(gif_display.show)
+
+        gif_display.show(None)
     
     # If a transaction was prepared during the conversation, rerun to show it
     if st.session_state.get("chatbot_needs_tx_rerun"):

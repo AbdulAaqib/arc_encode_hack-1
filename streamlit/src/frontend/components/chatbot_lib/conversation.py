@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, Iterable
+from typing import Any, Callable, Dict, Iterable, Optional
 
 import streamlit as st
 
@@ -44,6 +44,7 @@ def run_mcp_llm_conversation(
     function_map: Dict[str, Any],
     *,
     wallet_widget_callback: Any = None,
+    status_callback: Optional[Callable[[Optional[str]], None]] = None,
 ) -> None:
     pending = client.chat.completions.create(
         model=deployment,
@@ -95,6 +96,11 @@ def run_mcp_llm_conversation(
                     tool_output = tool_error(f"Tool '{tool_name}' is not registered.")
                 else:
                     try:
+                        if status_callback:
+                            try:
+                                status_callback(tool_name)
+                            except Exception:
+                                logger.exception("Status callback raised an error while starting '%s'", tool_name)
                         logger.info("Tool '%s' executing...", tool_name)
                         response_payload = handler(**arguments)
                         tool_output = (
@@ -155,6 +161,12 @@ def run_mcp_llm_conversation(
                             "Tool '%s' raised an exception: %s", tool_name, exc
                         )
                         tool_output = tool_error(str(exc))
+                    finally:
+                        if status_callback:
+                            try:
+                                status_callback(None)
+                            except Exception:
+                                logger.exception("Status callback raised an error while finishing '%s'", tool_name)
 
                 logger.info(
                     "Tool '%s' response: %s",
@@ -193,6 +205,12 @@ def run_mcp_llm_conversation(
                 st.markdown(content)
         logger.info("MCP conversation loop complete. Exiting.")
         break
+
+    if status_callback:
+        try:
+            status_callback(None)
+        except Exception:
+            logger.exception("Status callback raised an error during final reset")
 
     if wallet_pause_requested:
         return

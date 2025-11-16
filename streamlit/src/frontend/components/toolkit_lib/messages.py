@@ -26,16 +26,29 @@ def _json_default(value: Any) -> Any:
 
 def render_tool_message(tool_name: str, content: str) -> None:
     with st.chat_message("assistant"):
-        st.markdown(f"**Tool `{tool_name}` output:**")
-        _render_tool_content(content)
+        expander_title = f"Tool `{tool_name}` output"
+        st.markdown(f"✅ Tool `{tool_name}` completed. Expand below to review details.")
 
-        # Check if tool wants to show a transaction button
+        show_button = False
+        button_label = "Approve Transaction"
+        parsed_response: Any = None
+
         try:
-            parsed = json.loads(content)
-            if isinstance(parsed, dict) and parsed.get("show_button"):
-                button_label = parsed.get("button_label", "Approve Transaction")
-                button_key = f"tx_button_{tool_name}_{hash(content)}"
+            parsed_response = json.loads(content)
+            if isinstance(parsed_response, dict) and parsed_response.get("show_button"):
+                show_button = True
+                button_label = parsed_response.get("button_label", "Approve Transaction")
+        except Exception:
+            parsed_response = None
 
+        if show_button:
+            st.warning("Action required: expand the panel to approve this step.")
+
+        with st.expander(expander_title, expanded=False):
+            _render_tool_content(content)
+
+            if show_button:
+                button_key = f"tx_button_{tool_name}_{hash(content)}"
                 if st.button(f"🔐 {button_label}", key=button_key, type="primary"):
                     pending = st.session_state.get("chatbot_wallet_pending_command")
                     if isinstance(pending, dict):
@@ -43,10 +56,7 @@ def render_tool_message(tool_name: str, content: str) -> None:
                         pending.pop("headless_executed", None)
                         st.session_state["chatbot_wallet_pending_command"] = pending
                     st.session_state["chatbot_wallet_button_triggered"] = button_key
-                    # Trigger page rerun so wallet widget can send the transaction
                     st.rerun()
-        except:
-            pass  # Not a JSON response or no button needed
 
 
 def _render_tool_content(content: str) -> None:
