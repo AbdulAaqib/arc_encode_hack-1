@@ -2,6 +2,11 @@
 
 A credit‑infrastructure MVP on Arc that lets underserved creators and SMBs access stable‑coin loans using a verifiable on‑chain credential and a unified credit score from on‑chain + off‑chain data.
 
+## 📹 Demo Videos
+
+- **Lender Example Flow**: [Watch on YouTube](https://youtu.be/-lWevpKVUro)
+- **Borrower Example Flow**: [Watch on YouTube](https://youtu.be/dI2biD-2sFA)
+
 ---
 
 ## What it does
