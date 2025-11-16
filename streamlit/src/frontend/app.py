@@ -84,23 +84,93 @@ def _load_lottie_any(filepath: str) -> dict | None:
         return None
 
 
-def _show_lottie_splash_streamlit(
-    animation_data: dict, duration_ms: int = 5000
-) -> None:
-    """Show a splash using streamlit-lottie, then hide after a timeout.
-
-    Uses a placeholder and blocks for a short duration before clearing.
-    """
+def _show_gif_splash_once(file_path: str) -> None:
+    """Show a splash animation with pure CSS fade-out, then hide after 6 seconds."""
     if not st.session_state.get("splash_shown"):
         st.session_state["splash_shown"] = True
-        ph = st.empty()
-        with ph.container():
-            # Render the animation large; adjust height as needed
-            st_lottie(animation_data, height=800, key="startup-splash")
-        import time
+        try:
+            with open(file_path, "rb") as file:
+                contents = file.read()
+                data_url = base64.b64encode(contents).decode("utf-8")
+            
+            # Determine file type
+            file_ext = Path(file_path).suffix.lower()
+            is_video = file_ext in [".mp4", ".mov", ".webm"]
+            
+            if is_video:
+                mime_type = f"video/{file_ext[1:]}"
+                media_tag = (
+                    '<video id="splash-media" autoplay muted playsinline>'
+                    f'<source src="data:{mime_type};base64,{data_url}" type="{mime_type}">'
+                    "</video>"
+                )
+            else:
+                mime_type = "image/gif" if file_ext == ".gif" else "image/png"
+                media_tag = (
+                    f'<img id="splash-media" src="data:{mime_type};base64,{data_url}" />'
+                )
+            
+            html = f"""
+<style>
+#splash-overlay {{
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #ffffff;
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: splashFade 6000ms forwards;
+}}
 
-        time.sleep(max(0, int(duration_ms / 1000)))
-        ph.empty()
+#splash-media {{
+  max-width: min(75vw, 1000px);
+  max-height: min(75vh, 1000px);
+  width: auto;
+  height: auto;
+}}
+
+@keyframes splashFade {{
+  0% {{ opacity: 1; }}
+  90% {{ opacity: 1; }}
+  100% {{ opacity: 0;
+    z-index: -9999;
+ }}
+}}
+</style>
+<div id="splash-overlay">
+  {media_tag}
+</div>
+<script>
+  (function() {{
+    const media = document.getElementById('splash-media');
+    const overlay = document.getElementById('splash-overlay');
+    
+    function hideOverlay() {{
+      if (!overlay) {{
+        return;
+      }}
+      overlay.style.transition = 'opacity 250ms ease';
+      overlay.style.opacity = '0';
+      overlay.style.pointerEvents = 'none';
+      overlay.style.zIndex = '-9999';
+      setTimeout(() => {{
+        if (overlay && overlay.parentNode) {{
+          overlay.parentNode.removeChild(overlay);
+        }}
+      }}, 260);
+    }}
+    
+    // Always hide after 6 seconds (matches CSS animation)
+    setTimeout(hideOverlay, 6000);
+  }})();
+</script>
+            """
+            st.markdown(html, unsafe_allow_html=True)
+        except Exception:
+            pass  # Silently fail if file doesn't exist
 
 
 def _read_file_base64(filepath: str) -> str | None:
@@ -175,11 +245,10 @@ if load_dotenv:  # pragma: no cover - executed at runtime
 
 st.set_page_config(page_title="Sniffer Bank", page_icon="🐶", layout="wide")
 
-# Show full-screen Lottie splash on first load via streamlit-lottie
-_DOTLOTTIE_PATH = Path(__file__).parent / "lottie_files" / "Abstract _Orb.json"
-_anim = _load_lottie_any(_DOTLOTTIE_PATH)
-if _anim:
-    _show_lottie_splash_streamlit(_anim, duration_ms=6000)
+# Show full-screen splash on first load
+_SPLASH_PATH = Path(__file__).parent / "lottie_files" / "sniffer-logo.mp4"
+if _SPLASH_PATH.exists():
+    _show_gif_splash_once(str(_SPLASH_PATH))
 
 active_page = render_navigation()
 
