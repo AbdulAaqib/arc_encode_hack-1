@@ -123,7 +123,7 @@ def render_team_intro() -> None:
             st.markdown(
                 f"""
                 ### 🐾 Welcome to Sniffer Bank
-                <video autoplay loop muted playsinline style="width:100%;max-width:100%;border-radius:20px;display:block;margin:0 auto 1.5rem auto; margin-bottom: 2rem;">
+                <video autoplay loop muted playsinline style="border-radius:20px;display:block;margin:0 auto 1.5rem auto; margin-bottom: 2rem;">
                   <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
                 </video>
                 """,
