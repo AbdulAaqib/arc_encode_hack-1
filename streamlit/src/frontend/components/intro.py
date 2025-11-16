@@ -114,4 +114,38 @@ def _fetch_credit_score(
     return None
 
 def render_team_intro() -> None:
-    st.write("team intro here - same as sniffer ai")
+    st.markdown(
+        """
+        ### 🐾 Welcome to Sniffer Bank
+
+        Sniffer Bank is Collie’s playground—our resident credit hound who can sniff out reliable borrowers faster
+        than you can say “fetch.” We’re building cheeky, data-backed credit rails for the on-chain world, layering
+        invoice analytics, credit registries, and wallet telemetry so lenders stay in the know while borrowers
+        get wag-worthy experiences.
+        """
+    )
+
+    st.info(
+        "Collie’s daily routine: Fetch invoices, Chase delinquent payments, and sit right beside risk teams with real-time insights."
+    )
+
+    st.markdown("#### Pack Leaders")
+    col1, col2 = st.columns(2)
+    with col2:
+        st.markdown(
+            """
+            - **Junaid — DevOps & Engineering Wrangler**  
+              Keeps infra leashes tight and deployments zoomie-free.
+            - **Walid — Lead Strategy**  
+              Decides which hydrants we conquer next.
+            """
+        )
+    with col1:
+        st.markdown(
+            """
+            - **Sukhran — Backend & Blockchain**  
+              Former chew toy engineer, now architecting ledgers Collie trusts.
+            - **Abdul — Frontend & Blockchain**  
+              Gives the doghouse its glow-up while wiring wallet flows.
+            """
+        )
