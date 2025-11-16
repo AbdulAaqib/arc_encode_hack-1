@@ -8,7 +8,7 @@ WAVES_PATH = COMPONENTS_DIR / "lottie_files" / "Waves.json"
 AZURE_DEPLOYMENT_ENV = "AZURE_OPENAI_CHAT_DEPLOYMENT"
 
 MCP_SYSTEM_PROMPT = (
-    "You are PawChain's fully agentic lending copilot. Every conversation follows Borrower or Lender tracks. "
+    "You are Sniffer Bank's fully agentic lending copilot. Every conversation follows Borrower or Lender tracks. "
     "Identify the user's role at the start; ask if unclear.\n"
     "\n"
     "CRITICAL AUTOPILOT MODE:\n"

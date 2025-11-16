@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+import json
+from typing import Any, Optional
+from pathlib import Path
+import base64
+
 import os
 import random
 from typing import Optional
@@ -74,6 +79,39 @@ def _fetch_available_liquidity_usdc() -> Optional[float]:
         return raw_units / (10**decimals)
     except Exception:
         return None
+    client = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 10}))
+    return client if client.is_connected() else None
+
+
+def _resolve_session_dataframe(session_key: str) -> Optional[pd.DataFrame]:
+    value = st.session_state.get(session_key)
+    return value if isinstance(value, pd.DataFrame) else None
+
+
+def render_intro_page() -> None:
+    """Render the intro page with metric tiles and optional invoice table."""
+
+    st.title("🐶 Sniffer Bank")
+
+    env_rpc = os.getenv("ARC_TESTNET_RPC_URL", "https://rpc.testnet.arc.network")
+    rpc_url = st.session_state.get("rpc_url") or env_rpc
+    wallet_address = st.session_state.get("wallet_address")
+    contract_address = st.session_state.get("contract_address")
+    abi_text = st.session_state.get("contract_abi")
+    df = _resolve_session_dataframe("invoice_df")
+
+    w3 = get_web3_client(rpc_url) if rpc_url else None
+    if rpc_url and not w3:
+        st.warning("Unable to connect to the provided RPC endpoint. Double-check the URL or network status.")
+
+    balance = _fetch_wallet_balance(w3, wallet_address) if w3 and wallet_address else None
+    avg_delay, invoice_count = _compute_invoice_metrics(df)
+    credit_score = _fetch_credit_score(w3, wallet_address, contract_address, abi_text)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Wallet Balance (USDC)", f"{balance:.2f}" if balance is not None else "—")
+    col2.metric("Avg Payment Delay (days)", f"{avg_delay:.1f}" if avg_delay is not None else "—")
+    col3.metric("Invoice Count", invoice_count if invoice_count is not None else "—")
 
 
 def _liquidity_history() -> list[float]:
@@ -92,6 +130,8 @@ def _update_liquidity_history(value: Optional[float]) -> list[float]:
         history = history[-10:]
         st.session_state[LIQ_HISTORY_KEY] = history
     return history
+    render_team_intro()
+
 
 
 def render_intro_page() -> None:
@@ -221,3 +261,59 @@ Collie’s daily routine: **Fetch invoices**, **Chase delinquent payments**, and
         "Curious where to start? Hop into the Chatbot tab, connect MetaMask on Arc Testnet, and ask Doggo for a guided fetch mission."
     )
 
+def render_team_intro() -> None:
+    video_path = Path(__file__).resolve().parents[1] / "lottie_files" / "collie-intro.mp4"
+    if video_path.exists():
+        video_b64 = _read_file_base64(video_path)
+        if video_b64:
+            st.markdown(
+                f"""
+                ### 🐾 Welcome to Sniffer Bank
+                <video autoplay loop muted playsinline style="border-radius:20px;display:block;margin:0 auto 1.5rem auto; margin-bottom: 2rem;">
+                  <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+                </video>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown(
+        """
+        Sniffer Bank is Collie’s playground—our resident credit hound who can sniff out reliable borrowers faster
+        than you can say “fetch.” We’re building cheeky, data-backed credit rails for the on-chain world, layering
+        invoice analytics, credit registries, and wallet telemetry so lenders stay in the know while borrowers
+        get wag-worthy experiences.
+        """
+    )
+
+    st.info(
+        "Collie’s daily routine: Fetch invoices, Chase delinquent payments, and sit right beside risk teams with real-time insights."
+    )
+
+    st.markdown("#### Pack Leaders")
+    col1, col2 = st.columns(2)
+    with col2:
+        st.markdown(
+            """
+            - **Junaid — DevOps & Engineering Wrangler**  
+              Keeps infra leashes tight and deployments zoomie-free.
+            - **Walid — Lead Strategy**  
+              Decides which hydrants we conquer next.
+            """
+        )
+    with col1:
+        st.markdown(
+            """
+            - **Sukhran — Backend & Blockchain**  
+              Former chew toy engineer, now architecting ledgers Collie trusts.
+            - **Abdul — Frontend & Blockchain**  
+              Gives the doghouse its glow-up while wiring wallet flows.
+            """
+        )
+
+
+def _read_file_base64(file_path: Path) -> Optional[str]:
+    try:
+        with file_path.open("rb") as file:
+            return base64.b64encode(file.read()).decode("utf-8")
+    except Exception:
+        return None

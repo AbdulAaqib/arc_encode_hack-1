@@ -11,8 +11,9 @@ def initialize_chat_state() -> None:
             {
                 "role": "assistant",
                 "content": (
-                    "Sniffer reporting for duty! Drop a wallet, contract, pool, or transaction hash and I'll fetch the data, "
-                    "sniff for anomalies, and whip up the right MCP tools. Just say the word and we'll track every paw print together."
+                    "Hey there! I'm Collie, Sniffer Bank's teller. Are you here as a **Borrower** looking to unlock credit "
+                    "or as a **Lender** wanting to fund portfolios? Let me know and I'll tailor the steps, wallet tooling, "
+                    "and checklists to your role."
                 ),
             }
         ]

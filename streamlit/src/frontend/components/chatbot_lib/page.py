@@ -1123,7 +1123,7 @@ def _build_chatbot_state_tools(
 def render_chatbot_page() -> None:
     """Render the chatbot page using Azure OpenAI chat completions with MCP tool support."""
 
-    st.title("💬 PawChain Chatbot")
+    st.title("💬 Collie Assistant")
     st.caption(
         "Powered by OpenAI GPT-5 and MCP tools. Connect your wallet below, then chat with Doggo for agentic assistance."
     )
