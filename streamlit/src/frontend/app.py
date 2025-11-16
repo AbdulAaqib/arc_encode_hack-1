@@ -1,4 +1,4 @@
-"""Streamlit dashboard for PawChain Capital credit insights."""
+"""Streamlit dashboard for Sniffer Bank credit insights."""
 
 from __future__ import annotations
 
@@ -110,7 +110,7 @@ def _show_gif_splash_once(file_path: str) -> None:
                     f'<img id="splash-media" src="data:{mime_type};base64,{data_url}" />'
                 )
             
-            html = f"""
+            html_template = """
 <style>
 #splash-overlay {{
   position: fixed;
@@ -165,9 +165,9 @@ def _show_gif_splash_once(file_path: str) -> None:
     
     // Always hide after 6 seconds (matches CSS animation)
     setTimeout(hideOverlay, 6000);
-  }})();
 </script>
             """
+            html = html_template.format(media_tag=media_tag)
             st.markdown(html, unsafe_allow_html=True)
         except Exception:
             pass  # Silently fail if file doesn't exist

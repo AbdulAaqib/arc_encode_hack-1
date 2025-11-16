@@ -11,7 +11,7 @@ def initialize_chat_state() -> None:
             {
                 "role": "assistant",
                 "content": (
-                    "Hey there! I'm Doggo, PawChain's lending guide. Are you here as a **Borrower** looking to unlock credit "
+                    "Hey there! I'm Collie, Sniffer Bank's teller. Are you here as a **Borrower** looking to unlock credit "
                     "or as a **Lender** wanting to fund portfolios? Let me know and I'll tailor the steps, wallet tooling, "
                     "and checklists to your role."
                 ),

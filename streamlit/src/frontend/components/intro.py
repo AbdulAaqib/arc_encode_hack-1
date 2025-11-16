@@ -30,7 +30,7 @@ def _resolve_session_dataframe(session_key: str) -> Optional[pd.DataFrame]:
 def render_intro_page() -> None:
     """Render the intro page with metric tiles and optional invoice table."""
 
-    st.title("🐶 PawChain Capital Credit Dashboard")
+    st.title("🐶 Sniffer Bank Dashboard")
 
     env_rpc = os.getenv("ARC_TESTNET_RPC_URL", "https://rpc.testnet.arc.network")
     rpc_url = st.session_state.get("rpc_url") or env_rpc
@@ -110,4 +110,7 @@ def _fetch_credit_score(
     except Exception as exc:  # pragma: no cover - UI feedback only
         st.error(f"Unexpected contract error: {exc}")
     return None
+
+
+st.write("team intro here - same as sniffer ai")
 
