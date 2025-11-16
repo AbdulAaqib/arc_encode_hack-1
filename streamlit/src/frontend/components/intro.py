@@ -138,7 +138,7 @@ def render_intro_page() -> None:
 
     st.title("🏠 SnifferBank Home")
 
-    hero_col, spark_col = st.columns([1, 1])
+    dog_col, spark_col = st.columns([0.5, 0.5])
 
     liquidity_value = _fetch_available_liquidity_usdc()
     liquidity_series = _update_liquidity_history(liquidity_value)
@@ -146,17 +146,6 @@ def render_intro_page() -> None:
     latest_liq = liquidity_usdc[-1]
     delta_liq = liquidity_usdc[-1] - liquidity_usdc[-2] if len(liquidity_usdc) > 1 else 0
     chart_df = pd.DataFrame({"liquidity": [round(val, 3) for val in liquidity_usdc]})
-
-    if not st.session_state.get(INTRO_VISIT_KEY):
-        st.session_state[INTRO_VISIT_KEY] = True
-        st.write_stream(
-            _stream_text("Welcome to SnifferBank — where every ledger has a loyal watchdog 🐾")
-        )
-        _show_hero_image(hero_col)
-        st.balloons()
-    else:
-        _show_hero_image(hero_col)
-        st.caption("Welcome back to the Sniffer! Grab a biscuit and keep sniffing. 🦴")
 
     with spark_col:
         spark_col.caption("ARC Pool Liquidity (USDC)")
@@ -173,6 +162,9 @@ def render_intro_page() -> None:
             help=help_text,
             border=True,
         )
+    
+    with dog_col:
+        _show_dog_gif()
 
     st.subheader("🐾 Welcome to Sniffer Bank")
     st.markdown(
@@ -290,3 +282,17 @@ def _read_file_base64(file_path: Path) -> Optional[str]:
             return base64.b64encode(file.read()).decode("utf-8")
     except Exception:
         return None
+
+def _show_dog_gif() -> None:
+    video_path = Path(__file__).resolve().parents[1] / "lottie_files" / "collie-intro.mp4"
+    if video_path.exists():
+        video_b64 = _read_file_base64(video_path)
+        if video_b64:
+            st.markdown(
+                f"""
+                <video autoplay loop muted playsinline style="border-radius:20px;margin:0 auto 1.5rem auto; margin-bottom: 2rem;">
+                  <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+                </video>
+                """,
+                unsafe_allow_html=True,
+            )
