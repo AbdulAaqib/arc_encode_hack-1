@@ -198,8 +198,6 @@ export default function WalletConnect(): JSX.Element {
     )
   }, [info.isConnected, info.address, disconnect, connect, disabled, preferredAddress])
 
-  const borderColor = theme?.primaryColor ?? "#ddd"
-
   function chainIdToNumber(id?: string | number): number | undefined {
     if (id === undefined || id === null) return undefined
     if (typeof id === "number") return id
@@ -507,10 +505,7 @@ export default function WalletConnect(): JSX.Element {
         display: "flex",
         flexDirection: "column",
         gap: 8,
-        border: `1px solid ${borderColor}`,
         padding: 12,
-        borderRadius: 8,
-        background: "#fff",
         boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
       }}
     >
@@ -537,9 +532,7 @@ export default function WalletConnect(): JSX.Element {
             color: "#111",
             background: "#f7f7f7",
             padding: 10,
-            borderRadius: 6,
             overflowX: "auto",
-            border: `1px solid ${borderColor}`,
           }}>{pretty(txRequest)}</pre>
           <button onClick={() => sendTransaction()} disabled={disabled || sending || !info.isConnected || chainMismatch}>
             {sending ? "Sending…" : (txLabel ?? (action || "Send Transaction"))}
