@@ -30,7 +30,7 @@ def _resolve_session_dataframe(session_key: str) -> Optional[pd.DataFrame]:
 def render_intro_page() -> None:
     """Render the intro page with metric tiles and optional invoice table."""
 
-    st.title("🐶 Sniffer Bank Dashboard")
+    st.title("🐶 Sniffer Bank")
 
     env_rpc = os.getenv("ARC_TESTNET_RPC_URL", "https://rpc.testnet.arc.network")
     rpc_url = st.session_state.get("rpc_url") or env_rpc
@@ -64,6 +64,8 @@ def render_intro_page() -> None:
         if len(numeric_cols) > 0:
             with st.expander("Numeric column trends"):
                 st.line_chart(df[numeric_cols])
+
+    render_team_intro()
 
 
 def _fetch_wallet_balance(web3_client: Web3, wallet_address: str) -> Optional[float]:
@@ -111,6 +113,5 @@ def _fetch_credit_score(
         st.error(f"Unexpected contract error: {exc}")
     return None
 
-
-st.write("team intro here - same as sniffer ai")
-
+def render_team_intro() -> None:
+    st.write("team intro here - same as sniffer ai")
