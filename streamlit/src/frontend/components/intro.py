@@ -148,7 +148,7 @@ def render_intro_page() -> None:
 
     st.title("🏠 SnifferBank Home")
 
-    hero_col, spark_col = st.columns([1, 1], vertical_alignment="center")
+    dog_col, spark_col = st.columns([1, 1], vertical_alignment="center")
 
     liquidity_value = _fetch_available_liquidity_usdc()
     liquidity_series = _update_liquidity_history(liquidity_value)
