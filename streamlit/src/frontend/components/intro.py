@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+import os
 import pandas as pd
 import streamlit as st
 from web3 import Web3
@@ -29,9 +30,10 @@ def _resolve_session_dataframe(session_key: str) -> Optional[pd.DataFrame]:
 def render_intro_page() -> None:
     """Render the intro page with metric tiles and optional invoice table."""
 
-    st.title("🐶 Sniffer Bank")
+    st.title("🐶 PawChain Capital Credit Dashboard")
 
-    rpc_url = st.session_state.get("rpc_url", "https://rpc.testnet.arc.network")
+    env_rpc = os.getenv("ARC_TESTNET_RPC_URL", "https://rpc.testnet.arc.network")
+    rpc_url = st.session_state.get("rpc_url") or env_rpc
     wallet_address = st.session_state.get("wallet_address")
     contract_address = st.session_state.get("contract_address")
     abi_text = st.session_state.get("contract_abi")
@@ -39,34 +41,20 @@ def render_intro_page() -> None:
 
     w3 = get_web3_client(rpc_url) if rpc_url else None
     if rpc_url and not w3:
-        st.warning(
-            "Unable to connect to the provided RPC endpoint. Double-check the URL or network status."
-        )
+        st.warning("Unable to connect to the provided RPC endpoint. Double-check the URL or network status.")
 
-    balance = (
-        _fetch_wallet_balance(w3, wallet_address) if w3 and wallet_address else None
-    )
+    balance = _fetch_wallet_balance(w3, wallet_address) if w3 and wallet_address else None
     avg_delay, invoice_count = _compute_invoice_metrics(df)
     credit_score = _fetch_credit_score(w3, wallet_address, contract_address, abi_text)
 
     col1, col2, col3 = st.columns(3)
-    col1.metric(
-        "Wallet Balance (USDC)", f"{balance:.2f}" if balance is not None else "—"
-    )
-    col2.metric(
-        "Avg Payment Delay (days)", f"{avg_delay:.1f}" if avg_delay is not None else "—"
-    )
+    col1.metric("Wallet Balance (USDC)", f"{balance:.2f}" if balance is not None else "—")
+    col2.metric("Avg Payment Delay (days)", f"{avg_delay:.1f}" if avg_delay is not None else "—")
     col3.metric("Invoice Count", invoice_count if invoice_count is not None else "—")
 
     if credit_score is not None:
         st.markdown("### Credit Registry Snapshot")
-        st.json(
-            {
-                "creditScore": credit_score[0],
-                "metadata": credit_score[1:],
-                "raw": credit_score,
-            }
-        )
+        st.json({"creditScore": credit_score[0], "metadata": credit_score[1:], "raw": credit_score})
 
     if df is not None:
         st.markdown("### Invoice Overview")
@@ -92,15 +80,11 @@ def _fetch_wallet_balance(web3_client: Web3, wallet_address: str) -> Optional[fl
     return None
 
 
-def _compute_invoice_metrics(
-    df: Optional[pd.DataFrame],
-) -> tuple[Optional[float], Optional[int]]:
+def _compute_invoice_metrics(df: Optional[pd.DataFrame]) -> tuple[Optional[float], Optional[int]]:
     if df is None:
         return None, None
     invoice_count = len(df)
-    avg_delay = (
-        float(df["days_to_payment"].mean()) if "days_to_payment" in df.columns else None
-    )
+    avg_delay = float(df["days_to_payment"].mean()) if "days_to_payment" in df.columns else None
     return avg_delay, invoice_count
 
 
@@ -115,12 +99,8 @@ def _fetch_credit_score(
 
     try:
         abi = json.loads(abi_text)
-        contract = web3_client.eth.contract(
-            address=Web3.to_checksum_address(contract_address), abi=abi
-        )
-        return contract.functions.scores(
-            Web3.to_checksum_address(wallet_address)
-        ).call()
+        contract = web3_client.eth.contract(address=Web3.to_checksum_address(contract_address), abi=abi)
+        return contract.functions.scores(Web3.to_checksum_address(wallet_address)).call()
     except json.JSONDecodeError:
         st.error("ABI is not valid JSON. Please paste a valid ABI array.")
     except ValueError as exc:  # includes bad addresses
@@ -130,3 +110,4 @@ def _fetch_credit_score(
     except Exception as exc:  # pragma: no cover - UI feedback only
         st.error(f"Unexpected contract error: {exc}")
     return None
+
