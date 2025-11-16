@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from typing import Any, Optional
+from pathlib import Path
+import base64
 
 import os
 import pandas as pd
@@ -114,10 +116,22 @@ def _fetch_credit_score(
     return None
 
 def render_team_intro() -> None:
+    video_path = Path(__file__).resolve().parents[1] / "lottie_files" / "collie-intro.mp4"
+    if video_path.exists():
+        video_b64 = _read_file_base64(video_path)
+        if video_b64:
+            st.markdown(
+                f"""
+                ### 🐾 Welcome to Sniffer Bank
+                <video autoplay loop muted playsinline style="width:100%;max-width:100%;border-radius:20px;display:block;margin:0 auto 1.5rem auto; margin-bottom: 2rem;">
+                  <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+                </video>
+                """,
+                unsafe_allow_html=True,
+            )
+
     st.markdown(
         """
-        ### 🐾 Welcome to Sniffer Bank
-
         Sniffer Bank is Collie’s playground—our resident credit hound who can sniff out reliable borrowers faster
         than you can say “fetch.” We’re building cheeky, data-backed credit rails for the on-chain world, layering
         invoice analytics, credit registries, and wallet telemetry so lenders stay in the know while borrowers
@@ -149,3 +163,11 @@ def render_team_intro() -> None:
               Gives the doghouse its glow-up while wiring wallet flows.
             """
         )
+
+
+def _read_file_base64(file_path: Path) -> Optional[str]:
+    try:
+        with file_path.open("rb") as file:
+            return base64.b64encode(file.read()).decode("utf-8")
+    except Exception:
+        return None
